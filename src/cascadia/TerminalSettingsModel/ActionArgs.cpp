@@ -50,6 +50,7 @@
 #include "SelectCommandArgs.g.cpp"
 #include "SelectOutputArgs.g.cpp"
 #include "ColorSelectionArgs.g.cpp"
+#include "OpenAgentPaneArgs.g.cpp"
 
 #include <WtExeUtils.h>
 #include <ScopedResourceLoader.h>
@@ -1052,5 +1053,16 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
             return RS_switchable_(L"SelectCommandPreviousCommandKey");
         }
         return {};
+    }
+
+    winrt::hstring OpenAgentPaneArgs::GenerateName(const winrt::WARC::ResourceContext& context) const
+    {
+        if (!Prompt().empty())
+        {
+            return winrt::hstring{
+                fmt::format(FMT_COMPILE(L"{}: {}"), RS_switchable_(L"OpenAgentPaneCommandKey"), Prompt())
+            };
+        }
+        return RS_switchable_(L"OpenAgentPaneCommandKey");
     }
 }

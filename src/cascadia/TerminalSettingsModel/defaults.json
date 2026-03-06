@@ -33,6 +33,10 @@
     "minimizeToNotificationArea": false,
     "alwaysShowNotificationIcon": false,
 
+    // Agent Integration
+    "agentCliPath": "",
+    "agentPanePosition": "right",
+
     "profiles":
     [
         {
@@ -542,6 +546,7 @@
         { "command": "quickFix", "id": "Terminal.QuickFix" },
         { "command": { "action": "showSuggestions", "source": "all"}, "id": "Terminal.Suggestions" },
         { "command": "openCWD", "id": "Terminal.OpenCWD" },
+        { "command": "openAgentPane", "id": "Terminal.OpenAgentPane" },
 
         // Tab Management
         // "command": "closeTab" is unbound by default.

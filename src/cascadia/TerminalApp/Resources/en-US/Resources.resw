@@ -348,6 +348,9 @@
   <data name="CmdFocusPaneTargetArgDesc" xml:space="preserve">
     <value>Focus the pane at the given index</value>
   </data>
+  <data name="CmdAgentPromptArgDesc" xml:space="preserve">
+    <value>Open an AI agent pane with an optional prompt</value>
+  </data>
   <data name="CmdProfileArgDesc" xml:space="preserve">
     <value>Open with the given profile. Accepts either the name or GUID of a profile</value>
   </data>
@@ -567,6 +570,22 @@
   <data name="CommandPaletteModeAnnouncement_CommandlineMode" xml:space="preserve">
     <value>Command-line mode</value>
     <comment>This text will be read aloud using assistive technologies when the command palette switches into the raw commandline parsing mode.</comment>
+  </data>
+  <data name="CommandPaletteModeAnnouncement_AgentForegroundMode" xml:space="preserve">
+    <value>Agent prompt mode</value>
+    <comment>This text will be read aloud using assistive technologies when the command palette switches into the agent foreground prompt mode.</comment>
+  </data>
+  <data name="CommandPaletteModeAnnouncement_AgentBackgroundMode" xml:space="preserve">
+    <value>Agent background task mode</value>
+    <comment>This text will be read aloud using assistive technologies when the command palette switches into the agent background task mode.</comment>
+  </data>
+  <data name="CmdPalAgentForegroundPrompt" xml:space="preserve">
+    <value>Ask agent...</value>
+    <comment>Placeholder text shown in the command palette search box when in agent foreground prompt mode.</comment>
+  </data>
+  <data name="CmdPalAgentBackgroundPrompt" xml:space="preserve">
+    <value>Run agent task in background...</value>
+    <comment>Placeholder text shown in the command palette search box when in agent background task mode.</comment>
   </data>
   <data name="CommandPalette_NestedCommandAnnouncement" xml:space="preserve">
     <value>More options for "{}"</value>

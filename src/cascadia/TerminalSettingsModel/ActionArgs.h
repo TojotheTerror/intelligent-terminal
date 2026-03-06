@@ -52,6 +52,7 @@
 #include "SelectCommandArgs.g.h"
 #include "SelectOutputArgs.g.h"
 #include "ColorSelectionArgs.g.h"
+#include "OpenAgentPaneArgs.g.h"
 
 #include "JsonUtils.h"
 #include "HashUtils.h"
@@ -288,6 +289,10 @@ protected:                                                                  \
     X(winrt::Microsoft::Terminal::Control::SelectionColor, Foreground, "foreground", false, ArgTypeHint::None, nullptr) \
     X(winrt::Microsoft::Terminal::Control::SelectionColor, Background, "background", false, ArgTypeHint::None, nullptr) \
     X(winrt::Microsoft::Terminal::Core::MatchMode, MatchMode, "matchMode", false, ArgTypeHint::None, winrt::Microsoft::Terminal::Core::MatchMode::None)
+
+////////////////////////////////////////////////////////////////////////////////
+#define OPEN_AGENT_PANE_ARGS(X) \
+    X(winrt::hstring, Prompt, "prompt", false, ArgTypeHint::None, L"")
 
 ////////////////////////////////////////////////////////////////////////////////
 #define NEW_TERMINAL_ARGS(X)                                                                                                          \
@@ -1037,6 +1042,8 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
 
     ACTION_ARGS_STRUCT(ColorSelectionArgs, COLOR_SELECTION_ARGS);
 
+    ACTION_ARGS_STRUCT(OpenAgentPaneArgs, OPEN_AGENT_PANE_ARGS);
+
 }
 
 namespace winrt::Microsoft::Terminal::Settings::Model::factory_implementation
@@ -1078,6 +1085,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::factory_implementation
     BASIC_FACTORY(SuggestionsArgs);
     BASIC_FACTORY(SelectCommandArgs);
     BASIC_FACTORY(SelectOutputArgs);
+    BASIC_FACTORY(OpenAgentPaneArgs);
 }
 
 class ScopedResourceLoader;

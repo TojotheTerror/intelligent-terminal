@@ -483,5 +483,11 @@ namespace Microsoft.Terminal.Settings.Model
         SelectOutputDirection Direction { get; };
     }
 
+    [default_interface] runtimeclass OpenAgentPaneArgs : IActionArgs, IActionArgsDescriptorAccess
+    {
+        OpenAgentPaneArgs();
+
+        String Prompt;
+    };
 
 }

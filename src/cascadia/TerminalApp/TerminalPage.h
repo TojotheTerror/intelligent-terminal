@@ -274,6 +274,10 @@ namespace winrt::TerminalApp::implementation
         std::shared_ptr<Toast> _actionSaveFailedToast{ nullptr };
         std::shared_ptr<Toast> _windowCwdToast{ nullptr };
 
+        // Agent pane tracking - weak pointers to agent panes for reuse.
+        // Expired entries are pruned lazily during lookup.
+        std::vector<std::weak_ptr<Pane>> _agentPanes;
+
         winrt::Windows::UI::Xaml::Controls::TextBox::LayoutUpdated_revoker _renamerLayoutUpdatedRevoker;
         int _renamerLayoutCount{ 0 };
         bool _renamerPressedEnter{ false };
@@ -464,6 +468,16 @@ namespace winrt::TerminalApp::implementation
         void _OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command);
         void _OnCommandLineExecutionRequested(const IInspectable& sender, const winrt::hstring& commandLine);
         void _OnSwitchToTabRequested(const IInspectable& sender, const winrt::TerminalApp::Tab& tab);
+        void _OnAgentForegroundPromptRequested(const IInspectable& sender, const winrt::hstring& prompt);
+        void _OnAgentBackgroundTaskRequested(const IInspectable& sender, const winrt::hstring& prompt);
+
+        // Agent pane helpers
+        winrt::hstring _DetectAgentCli() const;
+        winrt::Microsoft::Terminal::Control::TermControl _FindAgentPaneControlInCurrentTab();
+        std::shared_ptr<Pane> _CreateAcpAgentPane(const winrt::hstring& startingDirectory,
+                                                   const winrt::hstring& agentCliPath,
+                                                   const winrt::hstring& initialPrompt);
+        void _OpenOrReuseAgentPane(const winrt::hstring& prompt);
 
         void _Find(const Tab& tab);
 

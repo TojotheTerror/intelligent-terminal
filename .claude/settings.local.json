@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh copilot:*)",
+      "Bash(node:*)",
+      "Bash(gh:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.github.com)",
+      "Bash(timeout 5 copilot:*)",
+      "Bash(npm install:*)",
+      "Bash(git:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

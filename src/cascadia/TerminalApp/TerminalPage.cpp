@@ -640,6 +640,229 @@ namespace winrt::TerminalApp::implementation
     }
 
     // Method Description:
+    // - This method is called when the user submits a foreground agent prompt
+    //   from the command palette (? prefix). Opens or reuses an agent pane
+    //   and sends the prompt to it.
+    // Arguments:
+    // - prompt - the user's agent prompt text
+    // Return Value:
+    // - <none>
+    void TerminalPage::_OnAgentForegroundPromptRequested(const IInspectable& /*sender*/, const winrt::hstring& prompt)
+    {
+        _OpenOrReuseAgentPane(prompt);
+    }
+
+    // Method Description:
+    // - This method is called when the user submits a background agent task
+    //   from the command palette (& prefix). Currently a stub that will be
+    //   connected to the Background Task Manager (C9) in a future change.
+    // Arguments:
+    // - prompt - the user's background task prompt text
+    // Return Value:
+    // - <none>
+    void TerminalPage::_OnAgentBackgroundTaskRequested(const IInspectable& /*sender*/, const winrt::hstring& /*prompt*/)
+    {
+        // TODO: Route to Background Task Manager (C9) when available.
+        // For now, this is a no-op stub. Future implementation will:
+        // 1. Submit the prompt to the Background Task Manager
+        // 2. Show a status indicator in the tab bar
+        // 3. Deliver results via toast notification on completion
+    }
+
+    // Method Description:
+    // - Auto-detects an installed agent CLI by searching the system PATH.
+    //   Checks for known CLIs in priority order: claude, copilot.
+    // Arguments:
+    // - <none>
+    // Return Value:
+    // - The name of the first found CLI, or empty string if none found.
+    winrt::hstring TerminalPage::_DetectAgentCli() const
+    {
+        wchar_t buffer[MAX_PATH];
+
+        // Prefer GitHub Copilot CLI in ACP mode (JSON-RPC over stdio).
+        // The --acp flag starts the agent as an ACP server; stdio is the default transport.
+        if (SearchPathW(nullptr, L"copilot", L".exe", MAX_PATH, buffer, nullptr) > 0)
+        {
+            return winrt::hstring{ L"copilot --acp --stdio" };
+        }
+
+        // Fall back to other known agent CLIs
+        static constexpr std::wstring_view fallbackClis[] = { L"claude" };
+        for (const auto& cli : fallbackClis)
+        {
+            if (SearchPathW(nullptr, cli.data(), L".exe", MAX_PATH, buffer, nullptr) > 0)
+            {
+                return winrt::hstring{ cli };
+            }
+        }
+        return winrt::hstring{};
+    }
+
+    // Method Description:
+    // - Searches the current tab's pane tree for an existing agent pane.
+    //   Prunes expired weak pointers during the search.
+    // Arguments:
+    // - <none>
+    // Return Value:
+    // - The TermControl of an existing agent pane in the current tab, or nullptr if none found.
+    TermControl TerminalPage::_FindAgentPaneControlInCurrentTab()
+    {
+        const auto tab = _GetFocusedTabImpl();
+        if (!tab)
+        {
+            return nullptr;
+        }
+
+        const auto rootPane = tab->GetRootPane();
+        if (!rootPane)
+        {
+            return nullptr;
+        }
+
+        // Walk through tracked agent panes, pruning expired weak_ptrs
+        for (auto it = _agentPanes.begin(); it != _agentPanes.end();)
+        {
+            auto pane = it->lock();
+            if (!pane)
+            {
+                it = _agentPanes.erase(it);
+                continue;
+            }
+
+            // Check if this agent pane exists within the current tab's pane tree
+            const auto found = rootPane->WalkTree([&](const auto& p) -> std::shared_ptr<Pane> {
+                if (p == pane)
+                {
+                    return p;
+                }
+                return nullptr;
+            });
+
+            if (found)
+            {
+                // Return the terminal control from this pane
+                return pane->GetTerminalControl();
+            }
+            ++it;
+        }
+        return nullptr;
+    }
+
+    // Method Description:
+    // - Creates a new pane running an ACP agent connection.
+    // Arguments:
+    // - startingDirectory - the working directory (passed as cwd in session/new)
+    // - agentCliPath - path or name of the ACP agent executable
+    // - initialPrompt - optional first prompt to send after session/new
+    // Return Value:
+    // - A new Pane hosting the ACP agent, or nullptr on failure.
+    std::shared_ptr<Pane> TerminalPage::_CreateAcpAgentPane(const winrt::hstring& startingDirectory,
+                                                             const winrt::hstring& agentCliPath,
+                                                             const winrt::hstring& initialPrompt)
+    {
+        // Create AcpConnection with settings
+        auto connection = TerminalConnection::AcpConnection{};
+        Windows::Foundation::Collections::ValueSet connSettings;
+        connSettings.Insert(L"agentCliPath", Windows::Foundation::PropertyValue::CreateString(agentCliPath));
+        connSettings.Insert(L"startingDirectory", Windows::Foundation::PropertyValue::CreateString(startingDirectory));
+        connSettings.Insert(L"initialPrompt", Windows::Foundation::PropertyValue::CreateString(initialPrompt));
+        connection.Initialize(connSettings);
+
+        // Use default profile for appearance settings
+        auto profile = _settings.GetProfileForArgs(nullptr);
+        auto controlSettings = Settings::TerminalSettings::CreateWithProfile(_settings, profile);
+
+        if (!startingDirectory.empty())
+        {
+            controlSettings.DefaultSettings()->StartingDirectory(startingDirectory);
+        }
+
+        const auto control = _CreateNewControlAndContent(controlSettings, connection);
+        auto paneContent{ winrt::make<TerminalPaneContent>(profile, _terminalSettingsCache, control) };
+        return std::make_shared<Pane>(paneContent);
+    }
+
+    void TerminalPage::_OpenOrReuseAgentPane(const winrt::hstring& prompt)
+    {
+        OutputDebugStringW(fmt::format(FMT_COMPILE(L"[AgentPane] _OpenOrReuseAgentPane called, prompt='{}'\n"),
+                                       std::wstring_view{ prompt }).c_str());
+
+        // 1. Resolve agent CLI path: setting > auto-detect
+        auto agentCliPath = _settings.GlobalSettings().AgentCliPath();
+        OutputDebugStringW(fmt::format(FMT_COMPILE(L"[AgentPane] agentCliPath from settings: '{}'\n"),
+                                       std::wstring_view{ agentCliPath }).c_str());
+        if (agentCliPath.empty())
+        {
+            agentCliPath = _DetectAgentCli();
+            OutputDebugStringW(fmt::format(FMT_COMPILE(L"[AgentPane] agentCliPath auto-detected: '{}'\n"),
+                                           std::wstring_view{ agentCliPath }).c_str());
+        }
+        if (agentCliPath.empty())
+        {
+            OutputDebugStringW(L"[AgentPane] No agent CLI found on PATH\n");
+            return;
+        }
+
+        // 2. Try to reuse an existing agent pane in the current tab.
+        auto existingControl = _FindAgentPaneControlInCurrentTab();
+        if (existingControl)
+        {
+            if (!prompt.empty())
+            {
+                existingControl.SendInput(prompt + L"\r");
+            }
+            return;
+        }
+
+        // 3. Get CWD. VirtualWorkingDirectory is checked first because
+        //    ProcessStartupActions temporarily sets it to the launching shell's
+        //    CWD for CLI-remoted commands (e.g. `wt agent`), matching how
+        //    `split-pane -d $PWD` works. For the in-terminal path (command
+        //    palette), VirtualWorkingDirectory is the window's default CWD.
+        winrt::hstring startingDirectory = _WindowProperties.VirtualWorkingDirectory();
+        if (startingDirectory.empty())
+        {
+            if (const auto& activeControl = _GetActiveControl())
+            {
+                startingDirectory = activeControl.WorkingDirectory();
+            }
+        }
+        if (startingDirectory.empty())
+        {
+            if (const auto tab = _GetFocusedTabImpl())
+            {
+                if (const auto profile = tab->GetFocusedProfile())
+                {
+                    startingDirectory = profile.EvaluatedStartingDirectory();
+                }
+            }
+        }
+
+        OutputDebugStringW(fmt::format(FMT_COMPILE(L"[AgentPane] CWD='{}', CLI='{}'\n"),
+                                       std::wstring_view{ startingDirectory },
+                                       std::wstring_view{ agentCliPath }).c_str());
+
+        // 4. Create new ACP agent pane
+        auto newPane = _CreateAcpAgentPane(startingDirectory, agentCliPath, prompt);
+        if (!newPane)
+        {
+            return;
+        }
+
+        _agentPanes.push_back(newPane);
+
+        // 5. Split the active tab with the agent pane
+        const auto& activeTab = _GetFocusedTabImpl();
+        const auto positionSetting = _settings.GlobalSettings().AgentPanePosition();
+        const auto splitDirection = (positionSetting == L"bottom")
+                                        ? SplitDirection::Down
+                                        : SplitDirection::Right;
+
+        _SplitPane(activeTab, splitDirection, 0.5f, newPane);
+    }
+
+    // Method Description:
     // - This method is called once on startup, on the first LayoutUpdated event.
     //   We'll use this event to know that we have an ActualWidth and
     //   ActualHeight, so we can now attempt to process our list of startup
@@ -2163,6 +2386,8 @@ namespace winrt::TerminalApp::implementation
         p.CommandLineExecutionRequested({ this, &TerminalPage::_OnCommandLineExecutionRequested });
         p.SwitchToTabRequested({ this, &TerminalPage::_OnSwitchToTabRequested });
         p.PreviewAction({ this, &TerminalPage::_PreviewActionHandler });
+        p.AgentForegroundPromptRequested({ this, &TerminalPage::_OnAgentForegroundPromptRequested });
+        p.AgentBackgroundTaskRequested({ this, &TerminalPage::_OnAgentBackgroundTaskRequested });
 
         return p;
     }

@@ -286,3 +286,5 @@ profiles.json
 
 # MSBuildCache
 /MSBuildCacheLogs/
+
+tmpclaude-*

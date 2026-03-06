@@ -73,9 +73,21 @@ int AppCommandlineArgs::ParseCommand(const Commandline& command)
         _app.parse(args);
         auto remainingParams = _app.remaining_size();
 
+        // If --agent was provided, create an OpenAgentPane action.
+        if (!_agentPrompt.empty())
+        {
+            OutputDebugStringW(fmt::format(FMT_COMPILE(L"[wt --agent] Prompt: '{}'\n"),
+                                           winrt::to_hstring(_agentPrompt)).c_str());
+            ActionAndArgs agentAction{};
+            agentAction.Action(ShortcutAction::OpenAgentPane);
+            OpenAgentPaneArgs agentArgs{};
+            agentArgs.Prompt(winrt::to_hstring(_agentPrompt));
+            agentAction.Args(agentArgs);
+            _startupActions.push_back(agentAction);
+        }
         // If we parsed the commandline, and _no_ subcommands were provided, try
         // parse the remaining suffix as a "new-tab" command.
-        if (_noCommandsProvided())
+        else if (_noCommandsProvided())
         {
             _newTabCommand.subcommand->parse(args);
             remainingParams = _newTabCommand.subcommand->remaining_size();
@@ -199,6 +211,10 @@ void AppCommandlineArgs::_buildParser()
     _app.add_option("-s,--saved",
                     _loadPersistedLayoutIdx,
                     RS_A(L"CmdSavedLayoutArgDesc"));
+
+    _app.add_option("--agent",
+                    _agentPrompt,
+                    RS_A(L"CmdAgentPromptArgDesc"));
 
     // Subcommands
     _buildNewTabParser();
@@ -815,6 +831,8 @@ void AppCommandlineArgs::_resetStateToDefault()
     _focusPaneTarget = -1;
     _loadPersistedLayoutIdx = -1;
 
+    // DON'T clear _agentPrompt here - it's a global option like _windowTarget.
+
     // DON'T clear _launchMode here! This will get called once for every
     // subcommand, so we don't want `wt -F new-tab ; split-pane` clearing out
     // the "global" fullscreen flag (-F).
@@ -1174,6 +1192,7 @@ void AppCommandlineArgs::FullResetState()
     _shouldExitEarly = false;
 
     _windowTarget = {};
+    _agentPrompt = {};
 }
 
 std::string_view AppCommandlineArgs::GetTargetWindow() const noexcept
