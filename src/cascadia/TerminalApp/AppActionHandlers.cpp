@@ -1633,4 +1633,11 @@ namespace winrt::TerminalApp::implementation
             args.Handled(handled);
         }
     }
+
+    void TerminalPage::_HandleToggleCoordinator(const IInspectable& /*sender*/,
+                                                const ActionEventArgs& args)
+    {
+        ToggleCoordinator();
+        args.Handled(true);
+    }
 }
