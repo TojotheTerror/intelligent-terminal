@@ -1,5 +1,5 @@
 pub(crate) mod types;
-// pub mod vt_channel; // TODO: update to new trait signature
+pub mod vt_channel;
 pub mod pipe_channel;
 
 pub use pipe_channel::PipeChannel;

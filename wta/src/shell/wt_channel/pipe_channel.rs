@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use anyhow::{bail, Context};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::ClientOptions;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
+use crate::app::DebugMessage;
 use super::types::{WireRequest, WireResponse};
 use super::WtChannel;
 
@@ -18,6 +19,7 @@ pub struct PipeChannel {
     next_id: AtomicU64,
     available: AtomicBool,
     debug_log: Option<Mutex<std::fs::File>>,
+    debug_tx: Option<mpsc::UnboundedSender<DebugMessage>>,
 }
 
 impl PipeChannel {
@@ -53,6 +55,7 @@ impl PipeChannel {
             next_id: AtomicU64::new(1),
             available: AtomicBool::new(false),
             debug_log,
+            debug_tx: None,
         };
 
         channel
@@ -78,6 +81,26 @@ impl PipeChannel {
         channel.available.store(true, Ordering::Relaxed);
         channel.log("Authenticated successfully").await;
         Ok(channel)
+    }
+
+    /// Attach a debug message sender for the TUI debug panel.
+    pub fn with_debug_sender(mut self, tx: mpsc::UnboundedSender<DebugMessage>) -> Self {
+        self.debug_tx = Some(tx);
+        self
+    }
+
+    fn emit_debug(&self, direction: crate::app::DebugDir, content: String) {
+        if let Some(ref tx) = self.debug_tx {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            let _ = tx.send(DebugMessage {
+                timestamp: ts,
+                direction,
+                content,
+            });
+        }
     }
 
     async fn log(&self, msg: &str) {
@@ -108,6 +131,7 @@ impl PipeChannel {
 
         let mut json = serde_json::to_string(&wire_req)?;
         self.log(&format!(">>> {}", json)).await;
+        self.emit_debug(crate::app::DebugDir::Sent, json.clone());
         json.push('\n');
 
         let mut pipe = self.pipe.lock().await;
@@ -127,6 +151,7 @@ impl PipeChannel {
 
         let resp_str = String::from_utf8_lossy(&buf);
         self.log(&format!("<<< {}", resp_str)).await;
+        self.emit_debug(crate::app::DebugDir::Received, resp_str.to_string());
 
         let resp: WireResponse = serde_json::from_slice(&buf)
             .context("Failed to parse response from Windows Terminal")?;

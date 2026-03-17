@@ -16,3 +16,5 @@ pub const SELECTED: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::Yellow)
     .add_modifier(Modifier::BOLD);
+pub const DEBUG_SENT: Style = Style::new().fg(Color::Green);
+pub const DEBUG_RECEIVED: Style = Style::new().fg(Color::Cyan);

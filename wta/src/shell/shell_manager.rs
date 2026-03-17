@@ -507,7 +507,7 @@ impl ShellManager {
         self.wt()?
             .request(
                 "send_input",
-                serde_json::json!({ "pane_id": pane_id, "input": input }),
+                serde_json::json!({ "pane_id": pane_id, "text": input }),
             )
             .await
     }

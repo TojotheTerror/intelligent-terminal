@@ -49,11 +49,15 @@ async fn main() -> Result<()> {
         return run_test_pipe().await;
     }
 
+    // Debug channel for TUI debug panel (pipe traffic viewer)
+    let (debug_tx, debug_rx) = tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
+
     // Try to connect to the Windows Terminal pipe (non-fatal if unavailable).
     let mut shell_mgr = ShellManager::new();
     let wt_connected = match shell::wt_channel::PipeChannel::connect().await {
         Ok(channel) => {
             eprintln!("[wta] Connected to Windows Terminal pipe");
+            let channel = channel.with_debug_sender(debug_tx.clone());
             shell_mgr = shell_mgr.with_wt_channel(Arc::new(channel));
             true
         }
@@ -64,16 +68,69 @@ async fn main() -> Result<()> {
     };
     let shell_mgr = Arc::new(shell_mgr);
 
+    // Try to discover our own pane identity by PID matching
+    let pane_identity = if wt_connected {
+        discover_pane_identity(&shell_mgr).await
+    } else {
+        None
+    };
+
     if cli.mcp {
         // Headless MCP server mode — no TUI
         protocol::mcp::server::run_mcp_server(shell_mgr).await
     } else {
         // ACP TUI client mode (default)
-        run_acp_tui_mode(cli, shell_mgr, wt_connected).await
+        run_acp_tui_mode(cli, shell_mgr, wt_connected, debug_rx, pane_identity).await
     }
 }
 
-async fn run_acp_tui_mode(cli: Cli, shell_mgr: Arc<ShellManager>, wt_connected: bool) -> Result<()> {
+/// Discover our own pane identity by matching our PID against WT's pane list.
+async fn discover_pane_identity(shell_mgr: &ShellManager) -> Option<(String, String, String)> {
+    let our_pid = std::process::id();
+
+    // List all windows, then tabs, then panes to find our PID
+    let windows = shell_mgr.wt_list_windows().await.ok()?;
+    let windows_arr = windows.get("windows")?.as_array()?;
+
+    for win in windows_arr {
+        let window_id = win.get("window_id")?.as_str()?;
+        let tabs = shell_mgr.wt_list_tabs(window_id).await.ok()?;
+        let tabs_arr = tabs.get("tabs")?.as_array()?;
+
+        for tab in tabs_arr {
+            // tab_id may be a string or number in the JSON
+            let tab_id_str = match tab.get("tab_id") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Number(n)) => n.to_string(),
+                _ => continue,
+            };
+            let panes = shell_mgr.wt_list_panes(&tab_id_str).await.ok()?;
+            let panes_arr = panes.get("panes")?.as_array()?;
+
+            for pane in panes_arr {
+                if let Some(pid) = pane.get("pid").and_then(|v| v.as_u64()) {
+                    if pid == our_pid as u64 {
+                        let pane_id = match pane.get("pane_id") {
+                            Some(serde_json::Value::String(s)) => s.clone(),
+                            Some(serde_json::Value::Number(n)) => n.to_string(),
+                            _ => continue,
+                        };
+                        return Some((pane_id, tab_id_str.clone(), window_id.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+async fn run_acp_tui_mode(
+    cli: Cli,
+    shell_mgr: Arc<ShellManager>,
+    wt_connected: bool,
+    debug_rx: tokio::sync::mpsc::UnboundedReceiver<app::DebugMessage>,
+    pane_identity: Option<(String, String, String)>,
+) -> Result<()> {
     // Init terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -82,7 +139,7 @@ async fn run_acp_tui_mode(cli: Cli, shell_mgr: Arc<ShellManager>, wt_connected: 
     let mut terminal = Terminal::new(backend)?;
 
     // Run the app
-    let result = run_acp_app(&mut terminal, cli, shell_mgr, wt_connected).await;
+    let result = run_acp_app(&mut terminal, cli, shell_mgr, wt_connected, debug_rx, pane_identity).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -150,6 +207,8 @@ async fn run_acp_app(
     cli: Cli,
     shell_mgr: Arc<ShellManager>,
     wt_connected: bool,
+    mut debug_rx: tokio::sync::mpsc::UnboundedReceiver<app::DebugMessage>,
+    pane_identity: Option<(String, String, String)>,
 ) -> Result<()> {
     // If WT pipe is connected, generate MCP config and inject into agent command
     // so the agent gets WT tools (list_windows, read_pane_output, etc.)
@@ -187,6 +246,14 @@ async fn run_acp_app(
             let evt_tx = event_tx.clone();
             tokio::task::spawn_local(event::read_crossterm_events(evt_tx));
 
+            // Forward pipe debug messages to the app event loop
+            let dbg_event_tx = event_tx.clone();
+            tokio::task::spawn_local(async move {
+                while let Some(msg) = debug_rx.recv().await {
+                    let _ = dbg_event_tx.send(app::AppEvent::DebugPipeMessage(msg));
+                }
+            });
+
             // Start ACP client
             let acp_event_tx = event_tx.clone();
             tokio::task::spawn_local(protocol::acp::client::run_acp_client(
@@ -199,6 +266,11 @@ async fn run_acp_app(
 
             // Run main event loop
             let mut app_state = app::App::new(prompt_tx, wt_connected);
+            if let Some((pane_id, tab_id, window_id)) = pane_identity {
+                app_state.pane_id = Some(pane_id);
+                app_state.tab_id = Some(tab_id);
+                app_state.window_id = Some(window_id);
+            }
             app_state.run(terminal, event_rx).await
         })
         .await

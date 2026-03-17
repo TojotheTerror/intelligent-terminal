@@ -37,7 +37,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let wt_info = if app.wt_connected { " | WT:pipe" } else { " | WT:local" };
 
-    let text = format!("[wta] {} | {}{}{}", name, status_text, session_info, wt_info);
+    let pane_info = match (&app.pane_id, &app.tab_id) {
+        (Some(p), Some(t)) => format!(" | pane:{} tab:{}", p, t),
+        (Some(p), None) => format!(" | pane:{}", p),
+        _ => String::new(),
+    };
+
+    let debug_hint = if app.show_debug_panel { "" } else { " | F12:debug" };
+
+    let text = format!("[wta] {} | {}{}{}{}{}", name, status_text, session_info, wt_info, pane_info, debug_hint);
     let p = Paragraph::new(text).style(status_style);
     frame.render_widget(p, area);
 }

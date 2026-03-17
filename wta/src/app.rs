@@ -7,6 +7,21 @@ use tokio::sync::mpsc;
 
 use crate::ui;
 
+// --- Debug types ---
+
+#[derive(Debug, Clone)]
+pub enum DebugDir {
+    Sent,
+    Received,
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugMessage {
+    pub timestamp: f64,
+    pub direction: DebugDir,
+    pub content: String,
+}
+
 // --- State types ---
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +96,7 @@ pub enum AppEvent {
         options: Vec<PermOption>,
         responder: tokio::sync::oneshot::Sender<String>,
     },
+    DebugPipeMessage(DebugMessage),
 }
 
 // --- App ---
@@ -99,6 +115,14 @@ pub struct App {
     pub agent_streaming: bool,
     pub should_quit: bool,
     prompt_tx: mpsc::UnboundedSender<String>,
+    // Debug panel
+    pub debug_messages: Vec<DebugMessage>,
+    pub show_debug_panel: bool,
+    pub debug_scroll: usize,
+    // Pane identity (populated via VT channel)
+    pub pane_id: Option<String>,
+    pub tab_id: Option<String>,
+    pub window_id: Option<String>,
 }
 
 impl App {
@@ -117,6 +141,12 @@ impl App {
             agent_streaming: false,
             should_quit: false,
             prompt_tx,
+            debug_messages: Vec::new(),
+            show_debug_panel: false,
+            debug_scroll: 0,
+            pane_id: None,
+            tab_id: None,
+            window_id: None,
         }
     }
 
@@ -207,6 +237,13 @@ impl App {
                     responder,
                 });
             }
+            AppEvent::DebugPipeMessage(msg) => {
+                self.debug_messages.push(msg);
+                // Cap at 500 messages
+                if self.debug_messages.len() > 500 {
+                    self.debug_messages.remove(0);
+                }
+            }
         }
     }
 
@@ -263,6 +300,19 @@ impl App {
         }
 
         match key.code {
+            KeyCode::F(12) => {
+                self.show_debug_panel = !self.show_debug_panel;
+                self.debug_scroll = 0;
+                return;
+            }
+            KeyCode::PageUp if key.modifiers.contains(KeyModifiers::SHIFT) && self.show_debug_panel => {
+                self.debug_scroll = self.debug_scroll.saturating_add(10);
+                return;
+            }
+            KeyCode::PageDown if key.modifiers.contains(KeyModifiers::SHIFT) && self.show_debug_panel => {
+                self.debug_scroll = self.debug_scroll.saturating_sub(10);
+                return;
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.agent_streaming {
                     // TODO: send cancel to agent
