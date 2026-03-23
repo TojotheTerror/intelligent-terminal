@@ -204,13 +204,13 @@ enum Command {
 
     /// Show a quick-pick dialog in Windows Terminal and print the user's selection
     QuickPick {
-        /// Title/question shown above the choices
-        #[arg(value_name = "TITLE")]
-        title: String,
-
-        /// Choices to present (1 or more)
+        /// Choices to present (1 or more, all positional args)
         #[arg(required = true)]
         choices: Vec<String>,
+
+        /// Title/question shown above the choices
+        #[arg(long, default_value = "Select an option")]
+        title: String,
 
         /// Allow freeform text input in addition to choices
         #[arg(long)]

@@ -621,6 +621,30 @@ namespace winrt::TerminalApp::implementation
     // - <none>
     void TerminalPage::_OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command)
     {
+        // Quick-pick interception: if a quick-pick is active, capture the
+        // selection and signal completion instead of dispatching the action.
+        if (auto state = _quickPickState)
+        {
+            // JSON-escape the command name.
+            auto name = winrt::to_string(command.Name());
+            std::string escaped;
+            escaped.reserve(name.size() + 2);
+            for (auto c : name)
+            {
+                if (c == '"')
+                    escaped += "\\\"";
+                else if (c == '\\')
+                    escaped += "\\\\";
+                else
+                    escaped += c;
+            }
+            // Only set the result here — the deferred visibility callback
+            // will call SetEvent once it sees a non-empty result.
+            state->result = winrt::to_hstring("{\"cancelled\":false,\"selected\":\"" + escaped + "\"}");
+            _quickPickState = nullptr;
+            return;
+        }
+
         const auto& actionAndArgs = command.ActionAndArgs();
         _actionDispatch->DoAction(sender, actionAndArgs);
     }

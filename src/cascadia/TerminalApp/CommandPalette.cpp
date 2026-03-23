@@ -1362,15 +1362,40 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    // Method Description:
-    // - Dismiss the command palette. This will:
-    //   * select all the current text in the input box
-    //   * set our visibility to Hidden
-    //   * raise our Closed event, so the page can return focus to the active Terminal
-    // Arguments:
-    // - <none>
-    // Return Value:
-    // - <none>
+    void CommandPalette::SetQuickPickCommands(IVector<Command> const& commands)
+    {
+        // Set up ActionMode for filtering behavior, but without the ">" prefix
+        // and with quick-pick-appropriate placeholder text.
+        _currentMode = CommandPaletteMode::ActionMode;
+        ParsedCommandLineText(L"");
+        _searchBox().Text(L"");
+        _searchBox().Select(_searchBox().Text().size(), 0);
+        _nestedActionStack.Clear();
+        ParentCommandName(L"");
+        _currentNestedCommands.Clear();
+
+        SearchBoxPlaceholderText(L"Select an option...");
+        NoMatchesText(RS_(L"CommandPalette_NoMatchesText/Text"));
+        ControlName(RS_(L"CommandPaletteControlName"));
+        PrefixCharacter(L"");
+
+        _allCommands.Clear();
+        for (const auto& action : commands)
+        {
+            auto actionPaletteItem{ winrt::make<winrt::TerminalApp::implementation::ActionPaletteItem>(action, winrt::hstring{}) };
+            auto filteredCommand{ winrt::make<FilteredCommand>(actionPaletteItem) };
+            _allCommands.Append(filteredCommand);
+        }
+
+        // Pre-populate filtered actions (palette is not visible yet).
+        auto actions = _collectFilteredActions();
+        _filteredActions.Clear();
+        for (const auto& action : actions)
+        {
+            _filteredActions.Append(action);
+        }
+    }
+
     void CommandPalette::_close()
     {
         Visibility(Visibility::Collapsed);

@@ -267,6 +267,14 @@ namespace winrt::TerminalApp::implementation
         // Set before calling _OpenNewTab/_SplitPane, cleared after.
         std::optional<std::unordered_map<std::wstring, std::wstring>> _pendingProtocolEnvVars;
 
+        // Quick-pick state for protocol quick_pick tool (CommandPalette-based).
+        struct QuickPickState
+        {
+            HANDLE completedEvent = nullptr;
+            hstring result;
+        };
+        std::shared_ptr<QuickPickState> _quickPickState;
+
         // Coordinator sidecar state
         winrt::Microsoft::Terminal::Control::TermControl _coordinatorControl{ nullptr };
         bool _coordinatorInitialized{ false };

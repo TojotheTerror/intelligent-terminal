@@ -840,13 +840,9 @@ namespace winrt::TerminalApp::implementation
         });
     }
 
-    hstring TerminalPage::ShowProtocolQuickPick(hstring title, hstring choicesJson, bool allowFreeInput)
+    hstring TerminalPage::ShowProtocolQuickPick(hstring /*title*/, hstring choicesJson, bool /*allowFreeInput*/)
     {
-        // We can't use _runOnUIThread here because ContentDialog::ShowAsync()
-        // needs to pump UI messages. Instead, dispatch to the UI thread,
-        // show the dialog async, and signal completion via an event.
-
-        // Parse choices on the calling thread (no UI needed).
+        // Parse choices on the calling (I/O) thread — no UI needed.
         Json::Value choices;
         {
             Json::CharReaderBuilder rb;
@@ -860,21 +856,14 @@ namespace winrt::TerminalApp::implementation
         }
 
         // Shared state for cross-thread result passing.
-        struct SharedState
-        {
-            HANDLE completedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-            hstring result;
-        };
-        auto state = std::make_shared<SharedState>();
+        auto state = std::make_shared<QuickPickState>();
+        state->completedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
-        // Capture what we need for the UI thread lambda.
-        auto capturedTitle = title;
         auto capturedChoices = std::move(choices);
-        auto capturedAllowFreeInput = allowFreeInput;
         auto weakThis = get_weak();
 
-        Dispatcher().RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
-            [state, capturedTitle, capturedChoices = std::move(capturedChoices), capturedAllowFreeInput, weakThis]() {
+        Dispatcher().RunAsync(CoreDispatcherPriority::Normal,
+            [state, capturedChoices = std::move(capturedChoices), weakThis]() {
                 auto strongThis = weakThis.get();
                 if (!strongThis)
                 {
@@ -882,96 +871,89 @@ namespace winrt::TerminalApp::implementation
                     return;
                 }
 
-                // Build UI elements on the UI thread.
-                auto panel = winrt::Windows::UI::Xaml::Controls::StackPanel();
-                panel.Spacing(8);
+                // Store the quick-pick state so _OnDispatchCommandRequested can intercept.
+                strongThis->_quickPickState = state;
 
-                std::vector<winrt::Windows::UI::Xaml::Controls::RadioButton> radioButtons;
+                // Build Command objects for each choice (Name + dummy SendInput action).
+                auto commands = winrt::single_threaded_vector<Command>();
                 for (Json::ArrayIndex i = 0; i < capturedChoices.size(); ++i)
                 {
-                    auto rb = winrt::Windows::UI::Xaml::Controls::RadioButton();
-                    rb.Content(winrt::box_value(winrt::to_hstring(capturedChoices[i].asString())));
-                    rb.GroupName(L"QuickPick");
-                    if (i == 0)
-                    {
-                        rb.IsChecked(true);
-                    }
-                    panel.Children().Append(rb);
-                    radioButtons.push_back(rb);
+                    auto choiceText = winrt::to_hstring(capturedChoices[i].asString());
+                    SendInputArgs sendArgs{ choiceText };
+                    ActionAndArgs actionAndArgs{ ShortcutAction::SendInput, sendArgs };
+
+                    auto cmd = Command{};
+                    cmd.Name(choiceText);
+                    cmd.ActionAndArgs(actionAndArgs);
+                    commands.Append(cmd);
                 }
 
-                winrt::Windows::UI::Xaml::Controls::TextBox freeInputBox{ nullptr };
-                winrt::Windows::UI::Xaml::Controls::RadioButton freeInputRadio{ nullptr };
-                if (capturedAllowFreeInput)
-                {
-                    freeInputRadio = winrt::Windows::UI::Xaml::Controls::RadioButton();
-                    freeInputRadio.Content(winrt::box_value(winrt::hstring{ L"Other (type below):" }));
-                    freeInputRadio.GroupName(L"QuickPick");
-                    panel.Children().Append(freeInputRadio);
+                // Load and configure the command palette.
+                // SetQuickPickCommands handles mode setup internally
+                // (ActionMode filtering without the ">" prefix).
+                auto palette = strongThis->LoadCommandPalette();
+                palette.SetQuickPickCommands(commands);
 
-                    freeInputBox = winrt::Windows::UI::Xaml::Controls::TextBox();
-                    freeInputBox.PlaceholderText(L"Type your response...");
-                    freeInputBox.Margin({ 24, 0, 0, 0 });
-                    freeInputBox.GotFocus([freeInputRadio](auto&&, auto&&) {
-                        freeInputRadio.IsChecked(true);
-                    });
-                    panel.Children().Append(freeInputBox);
-                }
+                // Register a visibility callback to detect cancellation (Escape key).
+                // CRITICAL: _close() is called BEFORE DispatchCommandRequested.raise()
+                // in CommandPalette::_dispatchCommand, so a synchronous visibility
+                // callback would incorrectly signal cancellation before the dispatch
+                // handler runs. We defer the cancel check via Dispatcher().RunAsync()
+                // so that the dispatch event (selection path) gets processed first.
+                auto visToken = std::make_shared<int64_t>(0);
+                *visToken = palette.RegisterPropertyChangedCallback(
+                    winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(),
+                    [state, weakThis, visToken](
+                        winrt::Windows::UI::Xaml::DependencyObject const& sender,
+                        winrt::Windows::UI::Xaml::DependencyProperty const&) {
+                        auto vis = winrt::unbox_value<winrt::Windows::UI::Xaml::Visibility>(
+                            sender.GetValue(winrt::Windows::UI::Xaml::UIElement::VisibilityProperty()));
 
-                winrt::Windows::UI::Xaml::Controls::ContentDialog dialog;
-                dialog.Title(winrt::box_value(capturedTitle));
-                dialog.Content(panel);
-                dialog.PrimaryButtonText(L"OK");
-                dialog.CloseButtonText(L"Cancel");
-                dialog.DefaultButton(winrt::Windows::UI::Xaml::Controls::ContentDialogButton::Primary);
-
-                if (const auto root = strongThis->XamlRoot())
-                {
-                    dialog.XamlRoot(root);
-                }
-
-                // ShowAsync returns asynchronously — does NOT block the UI thread.
-                auto asyncOp = dialog.ShowAsync();
-                asyncOp.Completed([state, radioButtons, freeInputRadio, freeInputBox, capturedChoices](
-                    auto&& operation, auto&& status) {
-                    Json::Value result;
-
-                    if (status != winrt::Windows::Foundation::AsyncStatus::Completed ||
-                        operation.GetResults() != winrt::Windows::UI::Xaml::Controls::ContentDialogResult::Primary)
-                    {
-                        result["cancelled"] = true;
-                        result["selected"] = "";
-                    }
-                    else
-                    {
-                        std::string selectedText;
-                        if (freeInputRadio && freeInputRadio.IsChecked().Value())
+                        if (vis != winrt::Windows::UI::Xaml::Visibility::Collapsed)
                         {
-                            selectedText = freeInputBox ? winrt::to_string(freeInputBox.Text()) : "";
+                            return;
+                        }
+
+                        // Unregister immediately to avoid repeat firing.
+                        sender.UnregisterPropertyChangedCallback(
+                            winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(), *visToken);
+
+                        // Defer the cancel check so DispatchCommandRequested runs first.
+                        if (auto page = weakThis.get())
+                        {
+                            page->Dispatcher().RunAsync(CoreDispatcherPriority::Normal,
+                                [state, weakThis]() {
+                                    if (auto page2 = weakThis.get())
+                                    {
+                                        // Restore the palette's action map.
+                                        auto palette2 = page2->LoadCommandPalette();
+                                        palette2.SetActionMap(page2->_settings.ActionMap());
+                                        page2->_quickPickState = nullptr;
+                                    }
+
+                                    // If result is still empty, the user cancelled (Escape/click away).
+                                    if (state->result.empty())
+                                    {
+                                        state->result = winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
+                                    }
+                                    SetEvent(state->completedEvent);
+                                });
                         }
                         else
                         {
-                            for (size_t i = 0; i < radioButtons.size(); ++i)
+                            // Page gone — just signal cancellation.
+                            if (state->result.empty())
                             {
-                                if (radioButtons[i].IsChecked().Value())
-                                {
-                                    selectedText = capturedChoices[static_cast<Json::ArrayIndex>(i)].asString();
-                                    break;
-                                }
+                                state->result = winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
                             }
+                            SetEvent(state->completedEvent);
                         }
-                        result["cancelled"] = false;
-                        result["selected"] = selectedText;
-                    }
+                    });
 
-                    Json::StreamWriterBuilder wb;
-                    wb["indentation"] = "";
-                    state->result = winrt::to_hstring(Json::writeString(wb, result));
-                    SetEvent(state->completedEvent);
-                });
+                palette.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
             });
 
-        // Block the pipe I/O thread until the dialog completes.
+        // Block the pipe I/O thread until the palette completes.
         WaitForSingleObject(state->completedEvent, INFINITE);
         CloseHandle(state->completedEvent);
         return state->result;

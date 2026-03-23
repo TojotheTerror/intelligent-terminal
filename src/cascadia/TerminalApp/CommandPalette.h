@@ -49,6 +49,8 @@ namespace winrt::TerminalApp::implementation
         void EnableTabSwitcherMode(const uint32_t startIdx, Microsoft::Terminal::Settings::Model::TabSwitcherMode tabSwitcherMode);
         void EnableTabSearchMode();
 
+        void SetQuickPickCommands(Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::Command> const& commands);
+
         til::property_changed_event PropertyChanged;
         til::typed_event<winrt::TerminalApp::CommandPalette, winrt::TerminalApp::Tab> SwitchToTabRequested;
         til::typed_event<winrt::TerminalApp::CommandPalette, winrt::hstring> CommandLineExecutionRequested;
