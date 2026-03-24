@@ -168,7 +168,7 @@ namespace winrt::TerminalApp::implementation
             }
 
             Json::Value result;
-            result["pane_id"] = std::to_string(activePane->ProtocolId());
+            result["pane_id"] = std::to_string(activePane->ContentId().value());
             result["tab_id"] = std::to_string(focusedTabIdx.value());
 
             if (const auto termContent = activePane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
@@ -255,7 +255,7 @@ namespace winrt::TerminalApp::implementation
                     }
 
                     Json::Value p;
-                    p["pane_id"] = std::to_string(pane->ProtocolId());
+                    p["pane_id"] = std::to_string(pane->ContentId().value());
                     p["tab_id"] = tabIdStr;
 
                     if (const auto termContent = pane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
@@ -323,7 +323,7 @@ namespace winrt::TerminalApp::implementation
                     continue;
                 }
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                 {
                     continue;
@@ -430,7 +430,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -511,7 +511,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -555,7 +555,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -712,7 +712,7 @@ namespace winrt::TerminalApp::implementation
                 const auto rootPane = tabImpl->GetRootPane();
                 if (rootPane)
                 {
-                    result["pane_id"] = std::to_string(rootPane->ProtocolId());
+                    result["pane_id"] = std::to_string(rootPane->ContentId().value());
 
                     const auto pid = _getPidFromPane(rootPane);
                     if (pid != 0)
@@ -744,7 +744,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -761,7 +761,7 @@ namespace winrt::TerminalApp::implementation
                 }
 
                 // Capture new pane info before moving it into the split.
-                const auto newPaneProtocolId = newPane->ProtocolId();
+                const auto newPaneContentId = newPane->ContentId().value();
                 const auto newPanePid = _getPidFromPane(newPane);
 
                 _SplitPane(tabImpl, direction, size, std::move(newPane), /*focusNewPane=*/!background);
@@ -769,7 +769,7 @@ namespace winrt::TerminalApp::implementation
 
                 Json::Value result;
                 result["tab_id"] = std::to_string(tabIdx);
-                result["pane_id"] = std::to_string(newPaneProtocolId);
+                result["pane_id"] = std::to_string(newPaneContentId);
                 if (newPanePid != 0)
                 {
                     result["pid"] = newPanePid;
@@ -800,7 +800,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -827,7 +827,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
