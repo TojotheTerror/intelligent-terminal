@@ -8,6 +8,7 @@
 #include <Windows.h>
 #include <objbase.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -52,8 +53,9 @@ struct Channel
                               bool allowFreeInput,
                               bool& cancelled, std::wstring& selected) = 0;
 
-    // Events
-    virtual HRESULT PollEvents(UINT32 timeoutMs, std::vector<std::wstring>& events) = 0;
+    // Events — push-based via callback
+    virtual HRESULT Subscribe(std::function<void(const std::wstring&)> onEvent) = 0;
+    virtual HRESULT Unsubscribe() = 0;
 
     // Connect to Windows Terminal via COM (WT_COM_CLSID env var).
     static std::unique_ptr<Channel> Connect();

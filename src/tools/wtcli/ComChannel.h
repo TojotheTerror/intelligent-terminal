@@ -6,6 +6,7 @@
 #include "Channel.h"
 
 #include <wrl/client.h>
+#include <wrl/implements.h>
 
 // COM-based channel that calls ITerminalProtocolServer methods directly.
 // No JSON serialization — typed structs cross the process boundary via
@@ -50,9 +51,33 @@ public:
                       bool allowFreeInput,
                       bool& cancelled, std::wstring& selected) override;
 
-    // Events
-    HRESULT PollEvents(UINT32 timeoutMs, std::vector<std::wstring>& events) override;
+    // Events — push-based via callback
+    HRESULT Subscribe(std::function<void(const std::wstring&)> onEvent) override;
+    HRESULT Unsubscribe() override;
 
 private:
     Microsoft::WRL::ComPtr<ITerminalProtocolServer> _server;
+    Microsoft::WRL::ComPtr<ITerminalEventCallback> _callbackInstance;
+};
+
+// WRL implementation of ITerminalEventCallback that delegates to a std::function.
+class EventCallback : public Microsoft::WRL::RuntimeClass<
+    Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::RuntimeClassType::ClassicCom>,
+    ITerminalEventCallback>
+{
+public:
+    EventCallback(std::function<void(const std::wstring&)> handler) :
+        _handler(std::move(handler)) {}
+
+    STDMETHODIMP OnEvent(BSTR eventJson) override
+    {
+        if (_handler && eventJson)
+        {
+            _handler(std::wstring(eventJson, SysStringLen(eventJson)));
+        }
+        return S_OK;
+    }
+
+private:
+    std::function<void(const std::wstring&)> _handler;
 };

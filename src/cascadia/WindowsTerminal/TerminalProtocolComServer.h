@@ -7,7 +7,6 @@
 
 #include <mutex>
 #include <vector>
-#include <string>
 
 // Per-brand CLSIDs — same pattern as CTerminalHandoff.
 #if defined(WT_BRANDING_RELEASE)
@@ -25,7 +24,7 @@ class WindowEmperor;
 struct __declspec(uuid(__CLSID_TerminalProtocolServer))
 TerminalProtocolComServer : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::RuntimeClassType::ClassicCom>, ITerminalProtocolServer>
 {
-    ~TerminalProtocolComServer() { _unregisterFromEvents(); }
+    ~TerminalProtocolComServer();
 
     // ITerminalProtocolServer — typed methods
     STDMETHODIMP Authenticate(BSTR token, BOOL* authenticated, BSTR* protocolVersion) override;
@@ -55,8 +54,9 @@ TerminalProtocolComServer : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::
     STDMETHODIMP QuickPick(BSTR title, UINT32 choiceCount, BSTR* choices,
                            BOOL allowFreeInput, BOOL* cancelled, BSTR* selected) override;
 
-    // Events
-    STDMETHODIMP PollEvents(UINT32 timeoutMs, UINT32* eventCount, BSTR** events) override;
+    // Events — push-based via callback
+    STDMETHODIMP Subscribe(ITerminalEventCallback* callback) override;
+    STDMETHODIMP Unsubscribe() override;
 
     // Static setup — must be called before s_StartListening().
     static void s_setEmperor(WindowEmperor* emperor) noexcept;
@@ -64,24 +64,24 @@ TerminalProtocolComServer : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::
     static HRESULT s_StartListening();
     static HRESULT s_StopListening();
 
-    // Event delivery — called from ProtocolRequestHandler when events fire.
-    // Enqueues the event JSON to all registered COM instances.
-    static void s_BroadcastEventToComClients(const std::string& eventJson);
+    // Deliver an event to all subscribed COM clients.
+    static void s_NotifyEventToComClients(const std::string& eventJson);
 
 private:
     bool _authenticated = false;
-    bool _eventsInitialized = false;
 
-    // Per-instance event queue for PollEvents
-    std::mutex _eventMutex;
-    std::vector<std::string> _eventQueue;
-    wil::unique_event _eventSignal; // Signaled when events arrive
+    // Per-instance event callback
+    std::mutex _callbackMutex;
+    Microsoft::WRL::ComPtr<ITerminalEventCallback> _callback;
 
     // Static tracking of live COM instances for event delivery
     static std::mutex s_instancesMutex;
     static std::vector<TerminalProtocolComServer*> s_instances;
-    void _registerForEvents();
-    void _unregisterFromEvents();
+    static bool s_pageEventsRegistered;
+
+    void _addInstance();
+    void _removeInstance();
+    static void _ensurePageEventsRegistered();
 
     static WindowEmperor* s_emperor;
 };

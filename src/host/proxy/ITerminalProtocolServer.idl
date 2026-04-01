@@ -75,6 +75,19 @@ typedef struct _PROTOCOL_TAB_CREATION_RESULT {
 } PROTOCOL_TAB_CREATION_RESULT;
 
 // ============================================================================
+// Callback interface for push-based event streaming
+// ============================================================================
+
+[
+    object,
+    uuid(539A9320-4CD2-4B59-8759-7E361EC9E7EA)
+]
+interface ITerminalEventCallback : IUnknown
+{
+    HRESULT OnEvent([in] BSTR eventJson);
+};
+
+// ============================================================================
 // Interface
 // ============================================================================
 
@@ -122,10 +135,8 @@ interface ITerminalProtocolServer : IUnknown
                       [out] BOOL* cancelled, [out, retval] BSTR* selected);
 
     // ── Events ──
-    // Poll for buffered protocol events (VT sequences, connection-state changes).
-    // Blocks up to timeoutMs waiting for at least one event.
-    // Returns an array of JSON-encoded event strings.
-    HRESULT PollEvents([in] UINT32 timeoutMs,
-                       [out] UINT32* eventCount,
-                       [out, size_is(,*eventCount)] BSTR** events);
+    // Subscribe to push-based protocol events (VT sequences, connection-state changes).
+    // The callback's OnEvent method is called for each event.
+    HRESULT Subscribe([in] ITerminalEventCallback* callback);
+    HRESULT Unsubscribe();
 };

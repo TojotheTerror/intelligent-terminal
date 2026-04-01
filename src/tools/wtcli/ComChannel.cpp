@@ -250,21 +250,21 @@ HRESULT ComChannel::QuickPick(const std::wstring& title,
     return hr;
 }
 
-HRESULT ComChannel::PollEvents(UINT32 timeoutMs, std::vector<std::wstring>& events)
+HRESULT ComChannel::Subscribe(std::function<void(const std::wstring&)> onEvent)
 {
-    UINT32 count = 0;
-    BSTR* raw = nullptr;
-    HRESULT hr = _server->PollEvents(timeoutMs, &count, &raw);
-    if (SUCCEEDED(hr) && raw)
+    auto callback = Microsoft::WRL::Make<EventCallback>(std::move(onEvent));
+    HRESULT hr = _server->Subscribe(callback.Get());
+    if (SUCCEEDED(hr))
     {
-        events.reserve(count);
-        for (UINT32 i = 0; i < count; ++i)
-        {
-            events.push_back(BstrToWstring(raw[i]));
-            SysFreeString(raw[i]);
-        }
-        CoTaskMemFree(raw);
+        _callbackInstance = callback;
     }
+    return hr;
+}
+
+HRESULT ComChannel::Unsubscribe()
+{
+    HRESULT hr = _server->Unsubscribe();
+    _callbackInstance.Reset();
     return hr;
 }
 

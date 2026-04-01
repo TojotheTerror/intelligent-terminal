@@ -284,7 +284,7 @@ void ProtocolRequestHandler::_ensurePageEventsRegistered()
                 // Broadcast to named-pipe clients
                 server->BroadcastEvent(jsonStr);
                 // Broadcast to COM clients
-                TerminalProtocolComServer::s_BroadcastEventToComClients(jsonStr);
+                TerminalProtocolComServer::s_NotifyEventToComClients(jsonStr);
             });
         break; // Single-window for now
     }

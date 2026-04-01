@@ -574,49 +574,49 @@ int main()
         auto ch = connect();
         if (!ch) return;
 
-        // Trigger lazy event registration via get_capabilities
-        {
-            std::wstring version, methods;
-            ch->GetCapabilities(version, methods);
-        }
+        // Set up Ctrl-C handler to unblock the wait.
+        static HANDLE s_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        SetConsoleCtrlHandler([](DWORD) -> BOOL {
+            SetEvent(s_stopEvent);
+            return TRUE;
+        }, TRUE);
 
         if (!jsonMode)
             fprintf(stderr, "Listening for events... (Ctrl-C to stop)\n");
 
-        while (true)
-        {
-            std::vector<std::wstring> events;
-            auto hr = ch->PollEvents(1000, events);
-            if (FAILED(hr))
-            {
-                fprintf(stderr, "PollEvents failed: 0x%08lX\n", hr);
-                exitCode = 1;
-                return;
-            }
+        auto hr = ch->Subscribe([&](const std::wstring& eventWide) {
+            auto eventUtf8 = WideToUtf8(eventWide);
 
-            for (const auto& eventWide : events)
+            // Optionally filter by pane_id
+            if (!listenTarget.empty())
             {
-                auto eventUtf8 = WideToUtf8(eventWide);
-
-                // Optionally filter by pane_id
-                if (!listenTarget.empty())
+                Json::Value ev;
+                Json::CharReaderBuilder rb;
+                std::string errs;
+                std::istringstream ss(eventUtf8);
+                if (Json::parseFromStream(rb, ss, &ev, &errs))
                 {
-                    Json::Value ev;
-                    Json::CharReaderBuilder rb;
-                    std::string errs;
-                    std::istringstream ss(eventUtf8);
-                    if (Json::parseFromStream(rb, ss, &ev, &errs))
-                    {
-                        auto paneId = ev["params"].get("pane_id", "").asString();
-                        if (paneId != listenTarget)
-                            continue;
-                    }
+                    auto paneId = ev["params"].get("pane_id", "").asString();
+                    if (paneId != listenTarget)
+                        return;
                 }
-
-                printf("%s\n", eventUtf8.c_str());
-                fflush(stdout);
             }
+
+            printf("%s\n", eventUtf8.c_str());
+            fflush(stdout);
+        });
+
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "Subscribe failed: 0x%08lX\n", hr);
+            exitCode = 1;
+            return;
         }
+
+        // Block until Ctrl-C.
+        WaitForSingleObject(s_stopEvent, INFINITE);
+        ch->Unsubscribe();
+        CloseHandle(s_stopEvent);
     });
 
     // ── Default (no subcommand) ──
