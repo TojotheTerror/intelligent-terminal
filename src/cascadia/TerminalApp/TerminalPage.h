@@ -179,18 +179,18 @@ namespace winrt::TerminalApp::implementation
         // Terminal Protocol Bridge Methods
         uint32_t TabCount() const;
         Windows::Foundation::IReference<uint32_t> FocusedTabIndex() const;
-        Microsoft::Terminal::Protocol::PaneInfo GetProtocolActivePane();
-        Windows::Foundation::Collections::IVector<Microsoft::Terminal::Protocol::TabInfo> GetProtocolTabs();
-        Windows::Foundation::Collections::IVector<Microsoft::Terminal::Protocol::PaneInfo> GetProtocolPanes(hstring tabIdFilter);
-        Microsoft::Terminal::Protocol::PaneOutput ReadProtocolPaneOutput(hstring paneId, hstring source, int32_t maxLines);
-        Microsoft::Terminal::Protocol::ProcessStatus GetProtocolProcessStatus(hstring paneId);
-        Microsoft::Terminal::Protocol::SessionVariable GetProtocolSessionVariable(hstring paneId, hstring name);
-        bool SetProtocolSessionVariable(hstring paneId, hstring name, hstring value);
-        Microsoft::Terminal::Protocol::TabCreationResult CreateProtocolTab(Microsoft::Terminal::Settings::Model::NewTerminalArgs args, bool background);
-        Microsoft::Terminal::Protocol::TabCreationResult SplitProtocolPane(hstring paneId, Microsoft::Terminal::Settings::Model::SplitDirection direction, float size, Microsoft::Terminal::Settings::Model::NewTerminalArgs args, bool background);
-        bool CloseProtocolPane(hstring paneId);
-        bool SendProtocolInput(hstring paneId, hstring text);
-        hstring ShowProtocolQuickPick(hstring title, hstring choicesJson, bool allowFreeInput);
+        Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::PaneInfo> GetProtocolActivePane();
+        Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVector<Microsoft::Terminal::Protocol::TabInfo>> GetProtocolTabs();
+        Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVector<Microsoft::Terminal::Protocol::PaneInfo>> GetProtocolPanes(hstring tabIdFilter);
+        Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::PaneOutput> ReadProtocolPaneOutput(hstring paneId, hstring source, int32_t maxLines);
+        Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::ProcessStatus> GetProtocolProcessStatus(hstring paneId);
+        Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::SessionVariable> GetProtocolSessionVariable(hstring paneId, hstring name);
+        Windows::Foundation::IAsyncOperation<bool> SetProtocolSessionVariable(hstring paneId, hstring name, hstring value);
+        Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::TabCreationResult> CreateProtocolTab(Microsoft::Terminal::Settings::Model::NewTerminalArgs args, bool background);
+        Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::TabCreationResult> SplitProtocolPane(hstring paneId, Microsoft::Terminal::Settings::Model::SplitDirection direction, float size, Microsoft::Terminal::Settings::Model::NewTerminalArgs args, bool background);
+        Windows::Foundation::IAsyncOperation<bool> CloseProtocolPane(hstring paneId);
+        Windows::Foundation::IAsyncOperation<bool> SendProtocolInput(hstring paneId, hstring text);
+        Windows::Foundation::IAsyncOperation<hstring> ShowProtocolQuickPick(hstring title, hstring choicesJson, bool allowFreeInput);
 
         til::property_changed_event PropertyChanged;
 
@@ -270,6 +270,7 @@ namespace winrt::TerminalApp::implementation
 
         bool _activated{ false };
         bool _visible{ true };
+        std::atomic<bool> _quickPickInProgress{ false };
 
         std::vector<std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs>> _previouslyClosedPanesAndTabs{};
 

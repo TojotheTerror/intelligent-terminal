@@ -623,7 +623,7 @@ int main()
             auto result = server.QuickPick(
                 winrt::to_hstring(quickPickTitle),
                 hstringChoices,
-                quickPickFreeInput);
+                quickPickFreeInput).get();
 
             if (jsonMode)
             {

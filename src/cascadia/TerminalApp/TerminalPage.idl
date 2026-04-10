@@ -110,18 +110,18 @@ namespace TerminalApp
         // Terminal Protocol Bridge Methods
         UInt32 TabCount { get; };
         Windows.Foundation.IReference<UInt32> FocusedTabIndex { get; };
-        Microsoft.Terminal.Protocol.PaneInfo GetProtocolActivePane();
-        Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.TabInfo> GetProtocolTabs();
-        Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.PaneInfo> GetProtocolPanes(String tabIdFilter);
-        Microsoft.Terminal.Protocol.PaneOutput ReadProtocolPaneOutput(String paneId, String source, Int32 maxLines);
-        Microsoft.Terminal.Protocol.ProcessStatus GetProtocolProcessStatus(String paneId);
-        Microsoft.Terminal.Protocol.SessionVariable GetProtocolSessionVariable(String paneId, String name);
-        Boolean SetProtocolSessionVariable(String paneId, String name, String value);
-        Microsoft.Terminal.Protocol.TabCreationResult CreateProtocolTab(Microsoft.Terminal.Settings.Model.NewTerminalArgs args, Boolean background);
-        Microsoft.Terminal.Protocol.TabCreationResult SplitProtocolPane(String paneId, Microsoft.Terminal.Settings.Model.SplitDirection direction, Single size, Microsoft.Terminal.Settings.Model.NewTerminalArgs args, Boolean background);
-        Boolean CloseProtocolPane(String paneId);
-        Boolean SendProtocolInput(String paneId, String text);
-        String ShowProtocolQuickPick(String title, String choicesJson, Boolean allowFreeInput);
+        Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneInfo> GetProtocolActivePane();
+        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.TabInfo> > GetProtocolTabs();
+        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.PaneInfo> > GetProtocolPanes(String tabIdFilter);
+        Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneOutput> ReadProtocolPaneOutput(String paneId, String source, Int32 maxLines);
+        Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.ProcessStatus> GetProtocolProcessStatus(String paneId);
+        Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.SessionVariable> GetProtocolSessionVariable(String paneId, String name);
+        Windows.Foundation.IAsyncOperation<Boolean> SetProtocolSessionVariable(String paneId, String name, String value);
+        Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.TabCreationResult> CreateProtocolTab(Microsoft.Terminal.Settings.Model.NewTerminalArgs args, Boolean background);
+        Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.TabCreationResult> SplitProtocolPane(String paneId, Microsoft.Terminal.Settings.Model.SplitDirection direction, Single size, Microsoft.Terminal.Settings.Model.NewTerminalArgs args, Boolean background);
+        Windows.Foundation.IAsyncOperation<Boolean> CloseProtocolPane(String paneId);
+        Windows.Foundation.IAsyncOperation<Boolean> SendProtocolInput(String paneId, String text);
+        Windows.Foundation.IAsyncOperation<String> ShowProtocolQuickPick(String title, String choicesJson, Boolean allowFreeInput);
         event Windows.Foundation.TypedEventHandler<Object, String> ProtocolVtSequenceReceived;
     }
 }

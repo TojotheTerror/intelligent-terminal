@@ -87,7 +87,7 @@ TerminalProtocolComServer : winrt::implements<TerminalProtocolComServer, Protoco
                             winrt::hstring const& name,
                             winrt::hstring const& value);
     winrt::hstring SetSettings(winrt::hstring const& settingsContent);
-    Protocol::QuickPickResult QuickPick(winrt::hstring const& title,
+    winrt::Windows::Foundation::IAsyncOperation<Protocol::QuickPickResult> QuickPick(winrt::hstring const& title,
                                          winrt::array_view<winrt::hstring const> choices,
                                          bool allowFreeInput);
 
@@ -114,7 +114,9 @@ private:
     // Static tracking of live COM instances for event delivery
     static std::mutex s_instancesMutex;
     static std::vector<TerminalProtocolComServer*> s_instances;
-    static bool s_pageEventsRegistered;
+    static std::once_flag s_pageEventsOnce;
+
+    bool _instanceRegistered{ false };
 
     void _addInstance();
     void _removeInstance();

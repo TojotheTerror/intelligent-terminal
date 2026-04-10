@@ -115,7 +115,7 @@ namespace Microsoft.Terminal.Protocol
         String SetSettings(String settingsContent);
 
         // Interactive
-        QuickPickResult QuickPick(String title, String[] choices, Boolean allowFreeInput);
+        Windows.Foundation.IAsyncOperation<QuickPickResult> QuickPick(String title, String[] choices, Boolean allowFreeInput);
 
         // Events — push-based via callback
         void Subscribe(IProtocolEventCallback callback);

@@ -25,7 +25,7 @@ static wil::unique_event g_comMtaStop;
 // Static instance tracking for event delivery to COM clients
 std::mutex TerminalProtocolComServer::s_instancesMutex;
 std::vector<TerminalProtocolComServer*> TerminalProtocolComServer::s_instances;
-bool TerminalProtocolComServer::s_pageEventsRegistered = false;
+std::once_flag TerminalProtocolComServer::s_pageEventsOnce;
 
 void TerminalProtocolComServer::s_setEmperor(WindowEmperor* emperor) noexcept
 {
@@ -102,6 +102,9 @@ TerminalProtocolComServer::~TerminalProtocolComServer()
 void TerminalProtocolComServer::_addInstance()
 {
     std::lock_guard lock{ s_instancesMutex };
+    if (_instanceRegistered)
+        return;
+    _instanceRegistered = true;
     s_instances.push_back(this);
 }
 
@@ -139,22 +142,23 @@ static bool _parseJson(const std::string& str, Json::Value& out)
 
 void TerminalProtocolComServer::_ensurePageEventsRegistered()
 {
-    if (s_pageEventsRegistered || !s_emperor)
+    if (!s_emperor)
         return;
-    s_pageEventsRegistered = true;
 
-    for (const auto& host : s_emperor->GetWindows())
-    {
-        const auto page = _getPage(host.get());
-        if (!page)
-            continue;
+    std::call_once(s_pageEventsOnce, []() {
+        for (const auto& host : s_emperor->GetWindows())
+        {
+            const auto page = _getPage(host.get());
+            if (!page)
+                continue;
 
-        page.ProtocolVtSequenceReceived(
-            [](auto&&, const winrt::hstring& eventJson) {
-                s_NotifyEventToComClients(winrt::to_string(eventJson));
-            });
-        break; // Single-window for now
-    }
+            page.ProtocolVtSequenceReceived(
+                [](auto&&, const winrt::hstring& eventJson) {
+                    s_NotifyEventToComClients(winrt::to_string(eventJson));
+                });
+            break; // Single-window for now
+        }
+    });
 }
 
 void TerminalProtocolComServer::s_NotifyEventToComClients(const std::string& eventJson)
@@ -199,7 +203,7 @@ Protocol::PaneInfo TerminalProtocolComServer::GetActivePane()
     const auto page = _getPage(host);
     THROW_HR_IF(E_FAIL, !page);
 
-    auto info = page.GetProtocolActivePane();
+    auto info = page.GetProtocolActivePane().get();
     THROW_HR_IF(E_FAIL, info.PaneId.empty());
 
     // TerminalPage doesn't know the window ID — fill it in here.
@@ -319,7 +323,7 @@ winrt::com_array<Protocol::TabInfo> TerminalProtocolComServer::ListTabs(
             continue;
 
         const auto windowIdHstr = winrt::to_hstring(windowIdStr);
-        const auto tabs = page.GetProtocolTabs();
+        const auto tabs = page.GetProtocolTabs().get();
         for (uint32_t i = 0; i < tabs.Size(); ++i)
         {
             auto t = tabs.GetAt(i);
@@ -356,7 +360,7 @@ winrt::com_array<Protocol::PaneInfo> TerminalProtocolComServer::ListPanes(
             continue;
 
         const auto windowIdHstr = winrt::to_hstring(windowIdStr);
-        const auto panes = page.GetProtocolPanes(tabIdFilter);
+        const auto panes = page.GetProtocolPanes(tabIdFilter).get();
         for (uint32_t i = 0; i < panes.Size(); ++i)
         {
             auto p = panes.GetAt(i);
@@ -383,7 +387,7 @@ Protocol::PaneOutput TerminalProtocolComServer::ReadPaneOutput(
         if (!page)
             continue;
 
-        auto info = page.ReadProtocolPaneOutput(paneId, effectiveSource, maxLines);
+        auto info = page.ReadProtocolPaneOutput(paneId, effectiveSource, maxLines).get();
         if (!info.PaneId.empty())
             return info;
     }
@@ -402,7 +406,7 @@ Protocol::ProcessStatus TerminalProtocolComServer::GetProcessStatus(
         if (!page)
             continue;
 
-        auto info = page.GetProtocolProcessStatus(paneId);
+        auto info = page.GetProtocolProcessStatus(paneId).get();
         if (!info.PaneId.empty())
             return info;
     }
@@ -422,7 +426,7 @@ Protocol::SessionVariable TerminalProtocolComServer::GetSessionVariable(
         if (!page)
             continue;
 
-        auto info = page.GetProtocolSessionVariable(paneId, name);
+        auto info = page.GetProtocolSessionVariable(paneId, name).get();
         if (!info.PaneId.empty())
             return info;
     }
@@ -480,7 +484,7 @@ Protocol::TabCreationResult TerminalProtocolComServer::CreateTab(
             newTermArgs.SuppressApplicationTitle(true);
     }
 
-    auto cr = page.CreateProtocolTab(newTermArgs, background);
+    auto cr = page.CreateProtocolTab(newTermArgs, background).get();
     THROW_HR_IF(E_FAIL, cr.TabId.empty());
 
     const auto& props = targetHost->Logic().WindowProperties();
@@ -525,7 +529,7 @@ Protocol::TabCreationResult TerminalProtocolComServer::SplitPane(
         if (!page)
             continue;
 
-        auto cr = page.SplitProtocolPane(paneId, splitDir, size, newTermArgs, background);
+        auto cr = page.SplitProtocolPane(paneId, splitDir, size, newTermArgs, background).get();
         if (cr.TabId.empty())
             continue; // pane not in this window
 
@@ -548,7 +552,7 @@ void TerminalProtocolComServer::ClosePane(winrt::hstring const& paneId)
         if (!page)
             continue;
 
-        if (page.CloseProtocolPane(paneId))
+        if (page.CloseProtocolPane(paneId).get())
             return;
     }
 
@@ -569,7 +573,7 @@ void TerminalProtocolComServer::SendInput(
         if (!page)
             continue;
 
-        if (page.SendProtocolInput(paneId, text))
+        if (page.SendProtocolInput(paneId, text).get())
             return;
     }
 
@@ -591,7 +595,7 @@ void TerminalProtocolComServer::SetSessionVariable(
         if (!page)
             continue;
 
-        if (page.SetProtocolSessionVariable(paneId, name, value))
+        if (page.SetProtocolSessionVariable(paneId, name, value).get())
             return;
     }
 
@@ -653,14 +657,14 @@ winrt::hstring TerminalProtocolComServer::SetSettings(
 // Interactive
 // ============================================================================
 
-Protocol::QuickPickResult TerminalProtocolComServer::QuickPick(
+winrt::Windows::Foundation::IAsyncOperation<Protocol::QuickPickResult> TerminalProtocolComServer::QuickPick(
     winrt::hstring const& title,
     winrt::array_view<winrt::hstring const> choices,
     bool allowFreeInput)
 {
     THROW_HR_IF(E_NOT_VALID_STATE, !s_emperor);
 
-    // Serialize choices to JSON for ShowProtocolQuickPick.
+    // Serialize choices to JSON before any co_await (array_view is non-owning).
     Json::Value choicesArr(Json::arrayValue);
     for (const auto& choice : choices)
     {
@@ -677,7 +681,7 @@ Protocol::QuickPickResult TerminalProtocolComServer::QuickPick(
     THROW_HR_IF(E_FAIL, !page);
 
     const auto resultJson = winrt::to_string(
-        page.ShowProtocolQuickPick(title, choicesJson, allowFreeInput));
+        co_await page.ShowProtocolQuickPick(title, choicesJson, allowFreeInput));
     THROW_HR_IF(E_FAIL, resultJson.empty());
 
     Json::Value r;
@@ -686,7 +690,7 @@ Protocol::QuickPickResult TerminalProtocolComServer::QuickPick(
     Protocol::QuickPickResult result{};
     result.Cancelled = r.get("cancelled", true).asBool();
     result.Selected = winrt::to_hstring(r.get("selected", "").asString());
-    return result;
+    co_return result;
 }
 
 // ============================================================================
