@@ -459,6 +459,7 @@ pub async fn run_host_server(
     let delegate_agent_runtimes = crate::coordinator::default_delegate_agent_runtimes(
         delegate_agent_cmd.as_deref(),
         Some(agent_cmd.as_str()),
+        None, // shared host doesn't have delegate model
     );
     tokio::spawn(crate::coordinator::run_recommendation_executor(
         recommendation_rx,

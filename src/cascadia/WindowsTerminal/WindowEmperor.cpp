@@ -1624,12 +1624,35 @@ void WindowEmperor::_startCoordinatorIfEnabled()
         return;
     }
 
-    auto agentCliPath = globals.AgentCliPath();
+    // Resolve agent CLI from structured settings (acpAgent/acpModel) or legacy agentCliPath.
+    winrt::hstring agentCliPath;
+    if (globals.HasAcpAgent())
+    {
+        const auto acpAgent = globals.AcpAgent();
+        const auto acpAgentLower = winrt::to_string(acpAgent);
+        if (acpAgentLower == "copilot" || acpAgentLower == "gemini")
+        {
+            std::wstring cmd{ acpAgent };
+            if (acpAgentLower == "copilot") { cmd += L" --acp --stdio"; }
+            else if (acpAgentLower == "gemini") { cmd += L" --experimental-acp"; }
+            const auto acpModel = globals.AcpModel();
+            if (!acpModel.empty()) { cmd += L" --model "; cmd += std::wstring_view{ acpModel }; }
+            agentCliPath = winrt::hstring{ cmd };
+        }
+    }
     if (agentCliPath.empty())
     {
-        agentCliPath = winrt::hstring{ detectDefaultAgentCliForHostPrewarm() };
+        agentCliPath = globals.AgentCliPath();
+        if (agentCliPath.empty())
+        {
+            agentCliPath = winrt::hstring{ detectDefaultAgentCliForHostPrewarm() };
+        }
     }
-    const auto delegateAgentCliPath = globals.DelegateAgentCliPath();
+
+    // Resolve delegate from structured setting or legacy.
+    auto delegateAgentCliPath = globals.HasDelegateAgent()
+        ? globals.DelegateAgent()
+        : globals.DelegateAgentCliPath();
 
     std::wstring cmdline;
     appendQuotedCommandArg(cmdline, wtaPath);
@@ -1643,6 +1666,16 @@ void WindowEmperor::_startCoordinatorIfEnabled()
     {
         cmdline += L" --delegate-agent";
         appendQuotedCommandArg(cmdline, std::wstring_view{ delegateAgentCliPath });
+    }
+    const auto delegateModel = globals.DelegateModel();
+    if (!delegateModel.empty())
+    {
+        cmdline += L" --delegate-model";
+        appendQuotedCommandArg(cmdline, std::wstring_view{ delegateModel });
+    }
+    if (!globals.AutoFixEnabled())
+    {
+        cmdline += L" --no-autofix";
     }
     cmdline += L" --pipe-name";
     appendQuotedCommandArg(cmdline, _protocolPipeName);

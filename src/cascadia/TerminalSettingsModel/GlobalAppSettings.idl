@@ -109,6 +109,13 @@ namespace Microsoft.Terminal.Settings.Model
         INHERITABLE_SETTING(String, SearchWebDefaultQueryUrl);
         INHERITABLE_SETTING(String, AgentCliPath);
         INHERITABLE_SETTING(String, DelegateAgentCliPath);
+        INHERITABLE_SETTING(String, AcpAgent);
+        INHERITABLE_SETTING(String, AcpModel);
+        INHERITABLE_SETTING(String, DelegateAgent);
+        INHERITABLE_SETTING(String, DelegateModel);
+        INHERITABLE_SETTING(Boolean, AutoFixEnabled);
+        INHERITABLE_SETTING(String, AcpCustomCommand);
+        INHERITABLE_SETTING(String, DelegateCustomCommand);
         INHERITABLE_SETTING(String, AgentPanePosition);
 
         // AI Integration settings

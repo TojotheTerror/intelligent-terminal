@@ -1,0 +1,109 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
+#pragma once
+
+#include "AIAgentsViewModel.g.h"
+#include "AgentEntry.g.h"
+#include "ViewModelHelpers.h"
+#include "Utils.h"
+
+namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
+{
+    struct AgentEntry : AgentEntryT<AgentEntry>
+    {
+        AgentEntry(winrt::hstring id, winrt::hstring displayName, bool isInstalled);
+
+        winrt::hstring Id() const { return _id; }
+        winrt::hstring DisplayName() const { return _displayName; }
+        winrt::hstring DisplayLabel() const;
+        bool IsInstalled() const { return _isInstalled; }
+        bool IsAddNew() const { return _isAddNew; }
+
+        void SetAddNew(bool value) { _isAddNew = value; }
+
+    private:
+        winrt::hstring _id;
+        winrt::hstring _displayName;
+        bool _isInstalled;
+        bool _isAddNew{ false };
+    };
+
+    struct AIAgentsViewModel : AIAgentsViewModelT<AIAgentsViewModel>, ViewModelHelper<AIAgentsViewModel>
+    {
+    public:
+        AIAgentsViewModel(Model::GlobalAppSettings globalSettings);
+
+        using ViewModelHelper<AIAgentsViewModel>::PropertyChanged;
+
+        winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry> AcpAgentList() const { return _acpAgentList; }
+        winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry> DelegateAgentList() const { return _delegateAgentList; }
+
+        Editor::AgentEntry CurrentAcpAgent();
+        void CurrentAcpAgent(const Editor::AgentEntry& value);
+        Editor::AgentEntry CurrentDelegateAgent();
+        void CurrentDelegateAgent(const Editor::AgentEntry& value);
+
+        // Custom agent preview
+        bool IsCustomAcpAgentSelected();
+        winrt::hstring CustomAcpCommandPreview();
+        void EditCustomAcpAgent();
+        bool IsCustomDelegateAgentSelected();
+        winrt::hstring CustomDelegateCommandPreview();
+        void EditCustomDelegateAgent();
+
+        // Edit mode
+        bool IsAddingCustomAcpAgent() const { return _isAddingCustomAcpAgent; }
+        bool IsAddingCustomDelegateAgent() const { return _isAddingCustomDelegateAgent; }
+
+        winrt::hstring CustomAcpCommand() const { return _customAcpCommand; }
+        void CustomAcpCommand(const winrt::hstring& value);
+        winrt::hstring CustomDelegateCommand() const { return _customDelegateCommand; }
+        void CustomDelegateCommand(const winrt::hstring& value);
+
+        void SaveCustomAcpAgent();
+        void SaveCustomDelegateAgent();
+        void CancelCustomAcpAgent();
+        void DeleteCustomAcpAgent();
+        void CancelCustomDelegateAgent();
+        void DeleteCustomDelegateAgent();
+
+        bool ShowAcpModel();
+        PERMANENT_OBSERVABLE_PROJECTED_SETTING(_GlobalSettings, AcpModel);
+        bool ShowDelegateModel();
+        PERMANENT_OBSERVABLE_PROJECTED_SETTING(_GlobalSettings, DelegateModel);
+        PERMANENT_OBSERVABLE_PROJECTED_SETTING(_GlobalSettings, AutoFixEnabled);
+
+        int32_t AgentPanePositionIndex();
+        void AgentPanePositionIndex(int32_t value);
+
+    private:
+        Model::GlobalAppSettings _GlobalSettings;
+        winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry> _acpAgentList;
+        winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry> _delegateAgentList;
+
+        bool _isAddingCustomAcpAgent{ false };
+        bool _isAddingCustomDelegateAgent{ false };
+        winrt::hstring _customAcpCommand;
+        winrt::hstring _customDelegateCommand;
+
+        static bool _IsAgentInstalled(const wchar_t* name);
+        static bool _IsKnownAgent(const winrt::hstring& id);
+        static winrt::hstring _DeriveId(const winrt::hstring& command);
+        Editor::AgentEntry _FindEntryById(
+            const winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry>& list,
+            const winrt::hstring& id) const;
+        void _AppendAddNewEntry(
+            winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry>& list);
+        void _MaybeAppendCustomEntry(
+            winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry>& list,
+            const winrt::hstring& customCommand,
+            const winrt::hstring& currentAgentId);
+    };
+};
+
+namespace winrt::Microsoft::Terminal::Settings::Editor::factory_implementation
+{
+    BASIC_FACTORY(AIAgentsViewModel);
+    BASIC_FACTORY(AgentEntry);
+}

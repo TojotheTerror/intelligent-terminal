@@ -1,0 +1,161 @@
+<!--
+    Copyright (c) Microsoft Corporation. All rights reserved. Licensed under
+    the MIT License. See LICENSE in the project root for license information.
+-->
+<Page x:Class="Microsoft.Terminal.Settings.Editor.AIAgents"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:local="using:Microsoft.Terminal.Settings.Editor"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
+      mc:Ignorable="d">
+
+    <Page.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="CommonResources.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <DataTemplate x:Key="AgentEntryTemplate"
+                          x:DataType="local:AgentEntry">
+                <TextBlock Text="{x:Bind DisplayLabel}"
+                           Opacity="{x:Bind local:AIAgents.InstalledOpacity(IsInstalled)}"
+                           FontStyle="{x:Bind local:AIAgents.AddNewFontStyle(IsAddNew)}" />
+            </DataTemplate>
+        </ResourceDictionary>
+    </Page.Resources>
+
+    <StackPanel>
+        <StackPanel Style="{StaticResource SettingsStackStyle}">
+
+            <!--  ═══ Agent Pane (ACP) Group ═══  -->
+            <TextBlock x:Uid="AIAgents_AcpGroupHeader"
+                       Style="{StaticResource SubtitleTextBlockStyle}"
+                       Margin="0,0,0,8" />
+
+            <!--  ACP Agent  -->
+            <local:SettingContainer x:Name="AcpAgent"
+                                    x:Uid="AIAgents_AcpAgent">
+                <StackPanel>
+                    <ComboBox AutomationProperties.AccessibilityView="Content"
+                              ItemTemplate="{StaticResource AgentEntryTemplate}"
+                              ItemsSource="{x:Bind ViewModel.AcpAgentList, Mode=OneWay}"
+                              SelectedItem="{x:Bind ViewModel.CurrentAcpAgent, Mode=TwoWay}"
+                              Style="{StaticResource ComboBoxSettingStyle}" />
+                    <!--  Read-only preview when custom agent is selected on page load  -->
+                    <StackPanel Orientation="Vertical"
+                                Visibility="{x:Bind ViewModel.IsCustomAcpAgentSelected, Mode=OneWay}"
+                                Margin="0,8,0,0"
+                                Spacing="4">
+                        <TextBlock Text="{x:Bind ViewModel.CustomAcpCommandPreview, Mode=OneWay}"
+                                   IsTextSelectionEnabled="True"
+                                   TextWrapping="Wrap"
+                                   Opacity="0.8" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Edit" Click="{x:Bind ViewModel.EditCustomAcpAgent}" />
+                            <Button Content="Delete" Click="{x:Bind ViewModel.DeleteCustomAcpAgent}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <!--  Editable panel (adding new or editing existing)  -->
+                    <StackPanel Orientation="Vertical"
+                                Visibility="{x:Bind ViewModel.IsAddingCustomAcpAgent, Mode=OneWay}"
+                                Margin="0,8,0,0"
+                                Spacing="4">
+                        <TextBox Text="{x:Bind ViewModel.CustomAcpCommand, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PlaceholderText="e.g. my-agent --acp --stdio"
+                                 Style="{StaticResource TextBoxSettingStyle}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Save" Click="{x:Bind ViewModel.SaveCustomAcpAgent}" Style="{StaticResource AccentButtonStyle}" />
+                            <Button Content="Delete" Click="{x:Bind ViewModel.DeleteCustomAcpAgent}" />
+                            <Button Content="Cancel" Click="{x:Bind ViewModel.CancelCustomAcpAgent}" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </local:SettingContainer>
+
+            <!--  ACP Model (only for built-in agents)  -->
+            <local:SettingContainer x:Name="AcpModel"
+                                    x:Uid="AIAgents_AcpModel"
+                                    Visibility="{x:Bind ViewModel.ShowAcpModel, Mode=OneWay}">
+                <TextBox Text="{x:Bind ViewModel.AcpModel, Mode=TwoWay}"
+                         PlaceholderText="default"
+                         Style="{StaticResource TextBoxSettingStyle}" />
+            </local:SettingContainer>
+
+            <!--  ═══ Delegate Agent Group ═══  -->
+            <TextBlock x:Uid="AIAgents_DelegateGroupHeader"
+                       Style="{StaticResource SubtitleTextBlockStyle}"
+                       Margin="0,16,0,8" />
+
+            <!--  Delegate Agent  -->
+            <local:SettingContainer x:Name="DelegateAgent"
+                                    x:Uid="AIAgents_DelegateAgent">
+                <StackPanel>
+                    <ComboBox AutomationProperties.AccessibilityView="Content"
+                              ItemTemplate="{StaticResource AgentEntryTemplate}"
+                              ItemsSource="{x:Bind ViewModel.DelegateAgentList, Mode=OneWay}"
+                              SelectedItem="{x:Bind ViewModel.CurrentDelegateAgent, Mode=TwoWay}"
+                              Style="{StaticResource ComboBoxSettingStyle}" />
+                    <StackPanel Orientation="Vertical"
+                                Visibility="{x:Bind ViewModel.IsCustomDelegateAgentSelected, Mode=OneWay}"
+                                Margin="0,8,0,0"
+                                Spacing="4">
+                        <TextBlock Text="{x:Bind ViewModel.CustomDelegateCommandPreview, Mode=OneWay}"
+                                   IsTextSelectionEnabled="True"
+                                   TextWrapping="Wrap"
+                                   Opacity="0.8" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Edit" Click="{x:Bind ViewModel.EditCustomDelegateAgent}" />
+                            <Button Content="Delete" Click="{x:Bind ViewModel.DeleteCustomDelegateAgent}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Orientation="Vertical"
+                                Visibility="{x:Bind ViewModel.IsAddingCustomDelegateAgent, Mode=OneWay}"
+                                Margin="0,8,0,0"
+                                Spacing="4">
+                        <TextBox Text="{x:Bind ViewModel.CustomDelegateCommand, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PlaceholderText="e.g. my-cli --flag"
+                                 Style="{StaticResource TextBoxSettingStyle}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Save" Click="{x:Bind ViewModel.SaveCustomDelegateAgent}" Style="{StaticResource AccentButtonStyle}" />
+                            <Button Content="Delete" Click="{x:Bind ViewModel.DeleteCustomDelegateAgent}" />
+                            <Button Content="Cancel" Click="{x:Bind ViewModel.CancelCustomDelegateAgent}" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </local:SettingContainer>
+
+            <!--  Delegate Model (only for built-in agents)  -->
+            <local:SettingContainer x:Name="DelegateModel"
+                                    x:Uid="AIAgents_DelegateModel"
+                                    Visibility="{x:Bind ViewModel.ShowDelegateModel, Mode=OneWay}">
+                <TextBox Text="{x:Bind ViewModel.DelegateModel, Mode=TwoWay}"
+                         PlaceholderText="default"
+                         Style="{StaticResource TextBoxSettingStyle}" />
+            </local:SettingContainer>
+
+            <!--  ═══ General ═══  -->
+            <TextBlock x:Uid="AIAgents_GeneralGroupHeader"
+                       Style="{StaticResource SubtitleTextBlockStyle}"
+                       Margin="0,16,0,8" />
+
+            <!--  Auto-Fix  -->
+            <local:SettingContainer x:Name="AutoFixEnabled"
+                                    x:Uid="AIAgents_AutoFix">
+                <ToggleSwitch IsOn="{x:Bind ViewModel.AutoFixEnabled, Mode=TwoWay}"
+                              Style="{StaticResource ToggleSwitchInExpanderStyle}" />
+            </local:SettingContainer>
+
+            <!--  Agent Pane Position  -->
+            <local:SettingContainer x:Name="AgentPanePosition"
+                                    x:Uid="AIAgents_PanePosition">
+                <ComboBox SelectedIndex="{x:Bind ViewModel.AgentPanePositionIndex, Mode=TwoWay}"
+                          Style="{StaticResource ComboBoxSettingStyle}">
+                    <ComboBoxItem Content="Right" Tag="right" />
+                    <ComboBoxItem Content="Bottom" Tag="bottom" />
+                </ComboBox>
+            </local:SettingContainer>
+        </StackPanel>
+    </StackPanel>
+</Page>

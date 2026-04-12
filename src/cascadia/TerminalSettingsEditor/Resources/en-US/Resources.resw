@@ -693,6 +693,70 @@
     <value>Extensions</value>
     <comment>Header for the "extensions" menu item. This navigates to a page that lets you see and modify extensions for the app.</comment>
   </data>
+  <data name="Nav_AIAgents.Content" xml:space="preserve">
+    <value>AI Agents</value>
+    <comment>Header for the "AI Agents" menu item. This navigates to a page that lets you configure AI agent integration settings.</comment>
+  </data>
+  <data name="AIAgents_AcpGroupHeader.Text" xml:space="preserve">
+    <value>Agent Pane</value>
+    <comment>Section header for the ACP agent pane settings group.</comment>
+  </data>
+  <data name="AIAgents_DelegateGroupHeader.Text" xml:space="preserve">
+    <value>Delegate Agent</value>
+    <comment>Section header for the delegate agent settings group.</comment>
+  </data>
+  <data name="AIAgents_GeneralGroupHeader.Text" xml:space="preserve">
+    <value>General</value>
+    <comment>Section header for general AI agent settings.</comment>
+  </data>
+  <data name="AIAgents_DelegateModel.Header" xml:space="preserve">
+    <value>Model</value>
+    <comment>Header for the setting that specifies an optional model override for the delegate agent.</comment>
+  </data>
+  <data name="AIAgents_DelegateModel.HelpText" xml:space="preserve">
+    <value>Optional model override for the delegate agent (e.g. claude-sonnet-4-20250514).</value>
+    <comment>Supplementary description for the delegate model setting.</comment>
+  </data>
+  <data name="AIAgents_AcpAgent.Header" xml:space="preserve">
+    <value>ACP Agent</value>
+    <comment>Header for the setting that specifies which AI agent powers the agent pane (e.g. copilot, gemini).</comment>
+  </data>
+  <data name="AIAgents_AcpAgent.HelpText" xml:space="preserve">
+    <value>The AI agent that powers the agent pane (e.g. copilot, gemini).</value>
+    <comment>Supplementary description for the ACP agent setting.</comment>
+  </data>
+  <data name="AIAgents_AcpModel.Header" xml:space="preserve">
+    <value>Model</value>
+    <comment>Header for the setting that specifies an optional model override for the ACP agent.</comment>
+  </data>
+  <data name="AIAgents_AcpModel.HelpText" xml:space="preserve">
+    <value>Optional model override (e.g. gpt-5, claude-haiku-4.5).</value>
+    <comment>Supplementary description for the model setting.</comment>
+  </data>
+  <data name="AIAgents_DelegateAgent.Header" xml:space="preserve">
+    <value>Delegate Agent</value>
+    <comment>Header for the setting that specifies which agent CLI handles delegated tasks.</comment>
+  </data>
+  <data name="AIAgents_DelegateAgent.HelpText" xml:space="preserve">
+    <value>Agent CLI for delegated tasks from the command palette (e.g. claude, codex).</value>
+    <comment>Supplementary description for the delegate agent setting.</comment>
+  </data>
+  <data name="AIAgents_AutoFix.Header" xml:space="preserve">
+    <value>Auto-fix on command failure</value>
+    <comment>Header for the toggle that enables automatic fix suggestions when commands fail.</comment>
+  </data>
+  <data name="AIAgents_AutoFix.HelpText" xml:space="preserve">
+    <value>Automatically suggest fixes when commands fail in monitored panes.</value>
+    <comment>Supplementary description for the auto-fix setting.</comment>
+  </data>
+  <data name="AIAgents_PanePosition.Header" xml:space="preserve">
+    <value>Agent Pane Position</value>
+    <comment>Header for the setting that controls where the agent pane appears (right or bottom).</comment>
+  </data>
+  <data name="AIAgents_PanePosition.HelpText" xml:space="preserve">
+    <value>Where the agent pane opens relative to the active pane (right or bottom).</value>
+    <comment>Supplementary description for the pane position setting.</comment>
+  </data>
   <data name="Profile_OpacitySlider.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>Background opacity</value>
     <comment>Name for a control to determine the level of opacity for the background of the control. The user can choose to make the background of the app more or less opaque.</comment>

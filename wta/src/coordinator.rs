@@ -9,64 +9,7 @@ use tokio::time::{sleep, Duration};
 use crate::app::AppEvent;
 use crate::shell::ShellManager;
 
-// ─── Agent CLI Registry ──────────────────────────────────────────────────────
-//
-// Each supported agent CLI has its own profile describing how to pass a prompt,
-// display name, etc. When adding a new agent, just add an entry here.
-
-/// How the agent CLI accepts a startup prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptFlag {
-    /// Flag before the prompt string, e.g. `-i "prompt"`.
-    Flag(&'static str),
-    /// Prompt is a bare positional argument, e.g. `codex "prompt"`.
-    Positional,
-}
-
-/// Static profile for a known agent CLI.
-#[derive(Debug, Clone)]
-pub struct AgentCliProfile {
-    pub id: &'static str,
-    pub display_name: &'static str,
-    pub prompt_flag: PromptFlag,
-    /// Preferred extension search order when resolving a bare name on PATH.
-    /// E.g. `&[".cmd", ".exe"]` means try `<name>.cmd` first, then `<name>.exe`.
-    pub exe_search_order: &'static [&'static str],
-}
-
-/// Registry of known agent CLIs.
-const KNOWN_AGENTS: &[AgentCliProfile] = &[
-    AgentCliProfile { id: "copilot",  display_name: "GitHub Copilot", prompt_flag: PromptFlag::Flag("-i"),  exe_search_order: &[".exe"] },
-    AgentCliProfile { id: "claude",   display_name: "Claude",         prompt_flag: PromptFlag::Positional,  exe_search_order: &[".exe", ".cmd"] },
-    AgentCliProfile { id: "codex",    display_name: "Codex",          prompt_flag: PromptFlag::Positional,  exe_search_order: &[".exe", ".cmd"] },
-    AgentCliProfile { id: "gemini",   display_name: "Gemini",         prompt_flag: PromptFlag::Positional,  exe_search_order: &[".exe", ".cmd"] },
-];
-
-/// Default profile for unknown agents.
-const DEFAULT_AGENT_PROFILE: AgentCliProfile = AgentCliProfile {
-    id: "unknown",
-    display_name: "Agent",
-    prompt_flag: PromptFlag::Flag("-i"),
-    exe_search_order: &[".exe", ".cmd"],
-};
-
-/// Look up an agent CLI profile by executable name.
-pub fn agent_cli_profile(executable: &str) -> &AgentCliProfile {
-    let basename = executable
-        .rsplit(|ch: char| ch == '\\' || ch == '/')
-        .next()
-        .unwrap_or(executable);
-    let lower = basename
-        .strip_suffix(".exe")
-        .or_else(|| basename.strip_suffix(".cmd"))
-        .or_else(|| basename.strip_suffix(".bat"))
-        .unwrap_or(basename)
-        .to_ascii_lowercase();
-    KNOWN_AGENTS
-        .iter()
-        .find(|p| p.id == lower)
-        .unwrap_or(&DEFAULT_AGENT_PROFILE)
-}
+use crate::agent_registry::{self, PromptFlag};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SupportedDelegateAgent {
@@ -82,6 +25,7 @@ pub struct DelegateAgentRuntime {
     pub description: String,
     pub commandline: String,
     pub prompt_delivery: DelegatePromptDelivery,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,21 +80,16 @@ pub enum RecommendedAction {
 }
 
 pub fn default_supported_delegate_agents() -> Vec<SupportedDelegateAgent> {
-    vec![SupportedDelegateAgent {
-        id: "copilot".to_string(),
-        name: "GitHub Copilot".to_string(),
-        description:
-            "Launches `copilot` in a new terminal target with a self-contained startup task prompt."
-                .to_string(),
-    }]
+    agent_registry::supported_delegate_agents()
 }
 
 pub fn default_delegate_agent_runtimes(
     delegate_agent_cmd: Option<&str>,
     agent_cmd: Option<&str>,
+    delegate_model: Option<&str>,
 ) -> Vec<DelegateAgentRuntime> {
     let commandline = resolve_delegate_runtime_commandline(delegate_agent_cmd, agent_cmd)
-        .unwrap_or_else(|| "copilot".to_string());
+        .unwrap_or_else(|| agent_registry::KNOWN_AGENTS[0].id.to_string());
     let (id, name) = derive_agent_identity(&commandline);
     vec![DelegateAgentRuntime {
         id,
@@ -161,6 +100,7 @@ pub fn default_delegate_agent_runtimes(
         ),
         commandline,
         prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+        model: delegate_model.filter(|m| !m.is_empty()).map(str::to_string),
     }]
 }
 
@@ -171,7 +111,7 @@ fn derive_agent_identity(commandline: &str) -> (String, String) {
         .next()
         .unwrap_or(commandline);
     let unquoted = first_token.trim_matches('"');
-    let profile = agent_cli_profile(unquoted);
+    let profile = agent_registry::lookup_profile(unquoted);
     if profile.id != "unknown" {
         return (profile.id.to_string(), profile.display_name.to_string());
     }
@@ -498,7 +438,21 @@ fn build_delegate_launch_commandline(
     // Resolve bare names (e.g. "claude" → "claude.exe") at launch time so we
     // always see the current PATH, not a stale snapshot from process startup.
     let resolved = resolve_commandline_executable(commandline);
-    let resolved_ref = resolved.as_str();
+
+    // If a model is configured, append --model <value> using the agent's model flags.
+    let with_model = if let Some(ref model) = runtime.model {
+        let exe = resolved.split_whitespace().next().unwrap_or("");
+        let profile = agent_registry::lookup_profile(exe);
+        if let Some(flag) = profile.model_flags.first() {
+            format!("{} {} {}", resolved, flag, model)
+        } else {
+            resolved.clone()
+        }
+    } else {
+        resolved.clone()
+    };
+    let resolved_ref = with_model.as_str();
+
     let raw = match runtime.prompt_delivery {
         DelegatePromptDelivery::LaunchThenSend => resolved_ref.to_string(),
         DelegatePromptDelivery::LaunchWithStartupPrompt => {
@@ -508,7 +462,7 @@ fn build_delegate_launch_commandline(
     };
     // .cmd/.bat shims (e.g. npm-installed CLIs) can't be launched directly
     // via CreateProcess — wrap with cmd /c so the command interpreter finds them.
-    if needs_shell_launch(resolved_ref) {
+    if needs_shell_launch(&resolved) {
         Ok(format!("cmd /c {}", raw))
     } else {
         Ok(raw)
@@ -521,7 +475,7 @@ fn build_delegate_launch_commandline(
 fn resolve_commandline_executable(commandline: &str) -> String {
     let tokens = split_windows_commandline(commandline);
     if let Some(first) = tokens.first() {
-        let resolved = resolve_bare_agent_name(first);
+        let resolved = agent_registry::resolve_bare_agent_name(first);
         if resolved != *first {
             let mut parts = vec![resolved];
             parts.extend(tokens[1..].iter().cloned());
@@ -540,78 +494,24 @@ fn resolve_delegate_runtime_commandline(
         .map(str::trim)
         .filter(|cmd| !cmd.is_empty())
     {
-        // Store the bare name as-is. Executable resolution (e.g. "claude" →
-        // "claude.exe") happens at launch time in build_delegate_launch_commandline
-        // so it always sees the current PATH.
+        // Strip ACP flags if present — the delegate path uses CLI mode, not ACP.
+        // This handles cases where the same custom entry is used for both ACP
+        // (agent pane) and delegation (? prompt).
+        if let Some(stripped) = agent_registry::strip_acp_flags_for_delegate(commandline) {
+            return Some(stripped);
+        }
         return Some(commandline.to_string());
     }
 
-    // For copilot, strip ACP-specific flags to get a clean delegate command.
-    if let Some(copilot) = resolve_copilot_delegate_runtime(agent_cmd) {
-        return Some(copilot);
+    // Strip ACP-specific flags from the agent command to get a clean delegate command.
+    if let Some(delegate) = agent_registry::strip_acp_flags_for_delegate(agent_cmd?) {
+        return Some(delegate);
     }
 
-    // For any other agent, derive the delegate command from the base executable name.
-    // Strip ACP/MCP flags (--acp, --stdio, --mcp) to get a standalone CLI invocation.
-    let agent_cmd = agent_cmd?;
-    let tokens = split_windows_commandline(agent_cmd);
+    // For non-ACP agents, derive the delegate command from the base executable name.
+    let tokens = split_windows_commandline(agent_cmd?);
     let command = tokens.first()?;
     Some(command.clone())
-}
-
-fn resolve_copilot_delegate_runtime(agent_cmd: Option<&str>) -> Option<String> {
-    let agent_cmd = agent_cmd?;
-    let tokens = split_windows_commandline(agent_cmd);
-    let command = tokens.first()?.clone();
-    if !is_copilot_command(&command) {
-        return None;
-    }
-
-    let mut args = vec![command.as_str()];
-    let model = extract_model_from_args(&tokens[1..]);
-    if let Some(model) = model.as_deref() {
-        args.push("--model");
-        args.push(model);
-    }
-    Some(join_windows_commandline(&args))
-}
-
-fn extract_model_from_args(args: &[String]) -> Option<String> {
-    let mut iter = args.iter().map(String::as_str);
-    while let Some(arg) = iter.next() {
-        if arg == "--model" || arg == "-m" {
-            if let Some(value) = iter.next() {
-                let trimmed = value.trim_matches(|ch| ch == '"' || ch == '\'');
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-            continue;
-        }
-
-        if let Some(value) = arg
-            .strip_prefix("--model=")
-            .or_else(|| arg.strip_prefix("-m="))
-        {
-            let trimmed = value.trim_matches(|ch| ch == '"' || ch == '\'');
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-fn is_copilot_command(command: &str) -> bool {
-    let executable = command
-        .rsplit(|ch| ch == '\\' || ch == '/')
-        .next()
-        .unwrap_or(command);
-    executable
-        .strip_suffix(".exe")
-        .unwrap_or(executable)
-        .eq_ignore_ascii_case("copilot")
 }
 
 /// Returns true if the command needs a `cmd /c` wrapper to run via CreateProcess.
@@ -652,41 +552,8 @@ fn needs_cmd_wrapper(command: &str) -> bool {
     true
 }
 
-/// Resolve a bare agent name (e.g. "claude") to the concrete executable found
-/// on PATH (e.g. "claude.cmd") using the agent's preferred search order from
-/// the registry. If the input already has a path separator or file extension,
-/// it is returned unchanged.
-fn resolve_bare_agent_name(bare_name: &str) -> String {
-    let trimmed = bare_name.trim().trim_matches('"');
-    // Already has a path separator — user provided a full/relative path.
-    if trimmed.contains('\\') || trimmed.contains('/') {
-        return bare_name.to_string();
-    }
-    // Already has a file extension — user was explicit.
-    if std::path::Path::new(trimmed).extension().is_some() {
-        return bare_name.to_string();
-    }
 
-    let profile = agent_cli_profile(trimmed);
-    let path_var = match std::env::var("PATH") {
-        Ok(v) => v,
-        Err(_) => return bare_name.to_string(),
-    };
-
-    for ext in profile.exe_search_order {
-        let candidate = format!("{}{}", trimmed, ext);
-        for dir in std::env::split_paths(&path_var) {
-            if dir.join(&candidate).is_file() {
-                return candidate;
-            }
-        }
-    }
-
-    // Not found on PATH — return bare name, downstream cmd /c will handle it.
-    bare_name.to_string()
-}
-
-fn split_windows_commandline(commandline: &str) -> Vec<String> {
+pub fn split_windows_commandline(commandline: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
@@ -754,7 +621,7 @@ async fn send_input_to_new_pane(
     Ok(())
 }
 
-fn join_windows_commandline(args: &[&str]) -> String {
+pub fn join_windows_commandline(args: &[&str]) -> String {
     args.iter()
         .map(|arg| quote_windows_commandline_arg(arg))
         .collect::<Vec<_>>()
@@ -770,10 +637,10 @@ fn build_delegate_startup_prompt_commandline(commandline: &str, input: &str) -> 
     let mut args = Vec::with_capacity(tokens.len() + 2);
     args.extend(tokens.iter().map(String::as_str));
 
-    // Look up the agent's prompt flag from the CLI registry.
+    // Look up the agent's prompt flag from the registry.
     let exe = tokens.first().map(|s| s.trim_matches('"')).unwrap_or("");
-    let profile = agent_cli_profile(exe);
-    if let PromptFlag::Flag(flag) = profile.prompt_flag {
+    let profile = agent_registry::lookup_profile(exe);
+    if let PromptFlag::Flag(flag) = profile.delegate_prompt_flag {
         args.push(flag);
     }
     args.push(input);
@@ -930,7 +797,7 @@ mod tests {
 
     #[test]
     fn default_delegate_runtime_uses_cli_default_model() {
-        let runtime = default_delegate_agent_runtimes(None, None)
+        let runtime = default_delegate_agent_runtimes(None, None, None)
             .into_iter()
             .find(|runtime| runtime.id == "copilot")
             .expect("copilot runtime should exist");
@@ -944,7 +811,7 @@ mod tests {
 
     #[test]
     fn delegate_launch_commandline_omits_model_when_not_configured() {
-        let runtime = default_delegate_agent_runtimes(None, None)
+        let runtime = default_delegate_agent_runtimes(None, None, None)
             .into_iter()
             .find(|runtime| runtime.id == "copilot")
             .expect("copilot runtime should exist");
@@ -953,7 +820,9 @@ mod tests {
             build_delegate_launch_commandline(&runtime, "Fix the build and report back").unwrap();
 
         assert!(!commandline.contains("--model"));
-        assert_eq!(commandline, "copilot -i \"Fix the build and report back\"");
+        // Executable may resolve to copilot.exe on PATH.
+        assert!(commandline.starts_with("copilot"));
+        assert!(commandline.contains("-i \"Fix the build and report back\""));
     }
 
     #[test]
@@ -961,6 +830,7 @@ mod tests {
         let runtime = default_delegate_agent_runtimes(
             None,
             Some("copilot --acp --stdio --model claude-haiku-4.5"),
+            None,
         )
         .into_iter()
         .find(|runtime| runtime.id == "copilot")
@@ -973,7 +843,7 @@ mod tests {
     fn delegate_runtime_preserves_explicit_copilot_exe_path() {
         let runtime = default_delegate_agent_runtimes(None, Some(
             "\"C:\\Users\\kaitao\\AppData\\Local\\Microsoft\\WinGet\\Links\\copilot.exe\" --acp --stdio --model=claude-haiku-4.5",
-        ))
+        ), None)
         .into_iter()
         .find(|runtime| runtime.id == "copilot")
         .expect("copilot runtime should exist");
@@ -989,6 +859,7 @@ mod tests {
         let runtime = default_delegate_agent_runtimes(
             Some("copilot --model claude-haiku-4.5"),
             Some("copilot --acp --stdio --model gpt-5.2"),
+            None,
         )
         .into_iter()
         .find(|runtime| runtime.id == "copilot")
@@ -1002,6 +873,7 @@ mod tests {
         let runtime = default_delegate_agent_runtimes(
             Some("copilot --model claude-haiku-4.5"),
             Some("copilot --acp --stdio --model gpt-5.2"),
+            None,
         )
         .into_iter()
         .find(|runtime| runtime.id == "copilot")
@@ -1013,10 +885,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            commandline,
-            "copilot --model claude-haiku-4.5 -i \"Fix the Rust build error and run cargo build\""
-        );
+        // Executable may resolve to copilot.exe on PATH.
+        assert!(commandline.starts_with("copilot"));
+        assert!(commandline.contains("--model claude-haiku-4.5"));
+        assert!(commandline.contains("-i \"Fix the Rust build error and run cargo build\""));
     }
 
     #[test]
@@ -1025,6 +897,7 @@ mod tests {
             Some(
                 "\"C:\\Users\\kaitao\\AppData\\Local\\Microsoft\\WinGet\\Links\\copilot.exe\" --model claude-haiku-4.5",
             ),
+            None,
             None,
         )
         .into_iter()

@@ -346,6 +346,7 @@ pub struct App {
     // Auto-fix: timestamp of last auto-fix prompt to debounce rapid errors
     // Auto-fix: the pane ID where the error occurred (used to auto-fill Send parent)
     pub autofix_pane_id: Option<String>,
+    pub autofix_enabled: bool,
 }
 
 impl App {
@@ -356,6 +357,7 @@ impl App {
         debug_capture_enabled: Arc<AtomicBool>,
         wt_connected: bool,
         shared_mode: bool,
+        autofix_enabled: bool,
     ) -> Self {
         Self {
             state: ConnectionState::Connecting("Starting agent...".to_string()),
@@ -404,6 +406,7 @@ impl App {
             wt_notifications: VecDeque::new(),
             show_notification_banner: false,
             autofix_pane_id: None,
+            autofix_enabled,
         }
     }
 
@@ -831,13 +834,17 @@ impl App {
                             return;
                         }
 
+                        // When auto-fix is disabled, skip notification display entirely —
+                        // there's nothing actionable for the user.
+                        if !self.autofix_enabled {
+                            return;
+                        }
+
                         self.messages
                             .push(ChatMessage::System(notification.summary.clone()));
                         self.show_notification_banner = true;
                         self.scroll_to_bottom();
 
-                        // Auto-fix: when a command fails, automatically ask the agent
-                        // to diagnose and suggest a fix. Debounce to avoid spamming.
                         self.maybe_trigger_autofix(&notification);
                     }
                     WtEventSeverity::Informational => {
@@ -1255,6 +1262,9 @@ impl App {
     /// Auto-fix: when a command fails in another pane, ask the coordinator
     /// agent to suggest a fix. The user confirms before execution.
     fn maybe_trigger_autofix(&mut self, notification: &WtNotification) {
+        if !self.autofix_enabled {
+            return;
+        }
         // Only trigger when the agent is connected and idle
         if self.state != ConnectionState::Connected || self.agent_streaming || self.prompt_in_flight
         {
@@ -1645,7 +1655,7 @@ mod tests {
         let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
         let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
         let debug_capture = Arc::new(AtomicBool::new(false));
-        App::new(prompt_tx, recommendation_tx, permission_tx, debug_capture, true, false)
+        App::new(prompt_tx, recommendation_tx, permission_tx, debug_capture, true, false, true)
     }
 
     // ─── classify_wt_event ──────────────────────────────────────────────────

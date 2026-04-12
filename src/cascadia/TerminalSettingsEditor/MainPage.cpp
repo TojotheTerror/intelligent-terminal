@@ -18,6 +18,8 @@
 #include "EditColorScheme.h"
 #include "AddProfile.h"
 #include "InteractionViewModel.h"
+#include "AIAgents.h"
+#include "AIAgentsViewModel.h"
 #include "LaunchViewModel.h"
 #include "NewTabMenuViewModel.h"
 #include "NewTabMenu.h"
@@ -586,6 +588,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
                     contentFrame().Navigate(xaml_typename<Editor::Extensions>(), winrt::make<NavigateToPageArgs>(_extensionsVM, *this, elementToFocus));
                     _breadcrumbs.Append(winrt::make<Breadcrumb>(vm, RS_(L"Nav_Extensions/Content"), BreadcrumbSubPage::None));
                 }
+            }
+            else if (*clickedItemTag == aiAgentsTag)
+            {
+                contentFrame().Navigate(xaml_typename<Editor::AIAgents>(), winrt::make<NavigateToPageArgs>(winrt::make<AIAgentsViewModel>(_settingsClone.GlobalSettings()), *this, elementToFocus));
+                _breadcrumbs.Append(winrt::make<Breadcrumb>(vm, RS_(L"Nav_AIAgents/Content"), BreadcrumbSubPage::None));
             }
             else if (*clickedItemTag == globalProfileTag)
             {

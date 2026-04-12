@@ -74,6 +74,13 @@ Author(s):
     X(bool, ShowTabsFullscreen, "showTabsFullscreen", false)                                                                                                                                            \
     X(hstring, AgentCliPath, "agentCliPath", L"")                                                                                                                                                       \
     X(hstring, DelegateAgentCliPath, "delegateAgentCliPath", L"")                                                                                                                                       \
+    X(hstring, AcpAgent, "acpAgent", L"copilot")                                                                                                                                                        \
+    X(hstring, AcpModel, "acpModel", L"")                                                                                                                                                               \
+    X(hstring, DelegateAgent, "delegateAgent", L"copilot")                                                                                                                                              \
+    X(hstring, DelegateModel, "delegateModel", L"")                                                                                                                                                    \
+    X(bool, AutoFixEnabled, "autoFixEnabled", true)                                                                                                                                                     \
+    X(hstring, AcpCustomCommand, "acpCustomCommand", L"")                                                                                                                                              \
+    X(hstring, DelegateCustomCommand, "delegateCustomCommand", L"")                                                                                                                                    \
     X(hstring, AgentPanePosition, "agentPanePosition", L"bottom")                                                                                                                                       \
     X(bool, AiCoordinatorEnabled, "aiIntegration.coordinator.enabled", false)                                                                                                                          \
     X(hstring, AiCoordinatorCommandline, "aiIntegration.coordinator.commandline", L"wta")                                                                                                                     \

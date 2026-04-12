@@ -36,7 +36,9 @@
       "Bash(where codex.exe)",
       "Bash(where codex:*)",
       "Bash(where copilot:*)",
-      "Bash(where copilot.exe)"
+      "Bash(where copilot.exe)",
+      "Bash(~/.cargo/bin/cargo test:*)",
+      "Bash(~/.cargo/bin/cargo check:*)"
     ]
   }
 }

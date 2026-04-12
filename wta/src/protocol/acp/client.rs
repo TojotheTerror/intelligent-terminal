@@ -548,13 +548,16 @@ impl PromptTimingState {
 }
 
 fn summarize_agent_identity(program: &str, args: &[&str]) -> (String, Option<String>) {
-    let brand = humanize_agent_brand(program);
-    let model = extract_model_arg(args).map(humanize_model_name);
+    let brand = crate::agent_registry::display_name_for(program);
+    let profile = crate::agent_registry::lookup_profile(program);
+    let model = crate::agent_registry::extract_model_from_args(args, profile)
+        .map(humanize_model_name);
     (brand, model)
 }
 
-fn requested_model_id(args: &[&str]) -> Option<String> {
-    extract_model_arg(args).map(ToOwned::to_owned)
+fn requested_model_id(program: &str, args: &[&str]) -> Option<String> {
+    let profile = crate::agent_registry::lookup_profile(program);
+    crate::agent_registry::extract_model_from_args(args, profile).map(str::to_string)
 }
 
 fn complete_prompt_request<T, E: std::fmt::Display>(
@@ -581,49 +584,6 @@ fn complete_prompt_request<T, E: std::fmt::Display>(
                 error_message
             )));
         }
-    }
-}
-
-fn extract_model_arg<'a>(args: &'a [&'a str]) -> Option<&'a str> {
-    let mut iter = args.iter().copied();
-    while let Some(arg) = iter.next() {
-        if arg == "--model" || arg == "-m" {
-            if let Some(value) = iter.next() {
-                let trimmed = value.trim_matches(|ch| ch == '"' || ch == '\'');
-                if !trimmed.is_empty() {
-                    return Some(trimmed);
-                }
-            }
-            continue;
-        }
-
-        if let Some(value) = arg
-            .strip_prefix("--model=")
-            .or_else(|| arg.strip_prefix("-m="))
-        {
-            let trimmed = value.trim_matches(|ch| ch == '"' || ch == '\'');
-            if !trimmed.is_empty() {
-                return Some(trimmed);
-            }
-        }
-    }
-
-    None
-}
-
-fn humanize_agent_brand(program: &str) -> String {
-    let executable = program
-        .rsplit(|ch| ch == '\\' || ch == '/')
-        .next()
-        .unwrap_or(program);
-    let lower = executable.to_ascii_lowercase();
-    let key = lower.strip_suffix(".exe").unwrap_or(&lower);
-
-    match key {
-        "copilot" => "GitHub Copilot".to_string(),
-        "claude" => "Claude".to_string(),
-        "codex" => "Codex".to_string(),
-        _ => humanize_identifier(key),
     }
 }
 
@@ -1390,19 +1350,28 @@ async fn run_inner(
 ) -> Result<()> {
     let startup_probe = StartupProbe::new();
 
-    // Parse agent command into program + args
+    // Parse agent command into program + args, resolving bare names (e.g.
+    // "gemini" → "gemini.cmd") via the agent registry so npm-installed CLIs
+    // are found on PATH.
     let parts: Vec<&str> = agent_cmd.split_whitespace().collect();
-    let program = parts
+    let raw_program = parts
         .first()
         .ok_or_else(|| anyhow::anyhow!("empty agent command"))?;
     let args = &parts[1..];
+    let resolved_program = crate::agent_registry::resolve_bare_agent_name(raw_program);
+    let needs_cmd = crate::coordinator::needs_shell_launch(&resolved_program);
 
     // Spawn agent subprocess
-    let spawn_stage = format!("Spawning {}...", program);
+    let program = if needs_cmd { "cmd" } else { resolved_program.as_str() };
+    let spawn_stage = format!("Spawning {}...", resolved_program);
     let _ = event_tx.send(AppEvent::ConnectionStage(spawn_stage.clone()));
-    startup_probe.log(&format!("{} cmd={}", spawn_stage, agent_cmd));
+    startup_probe.log(&format!("{} cmd={} resolved={} needs_cmd={}", spawn_stage, agent_cmd, resolved_program, needs_cmd));
 
-    let mut child = tokio::process::Command::new(program)
+    let mut cmd = tokio::process::Command::new(program);
+    if needs_cmd {
+        cmd.arg("/c").arg(&resolved_program);
+    }
+    let mut child = cmd
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1488,38 +1457,45 @@ async fn run_inner(
         }
     });
 
-    // Initialize
+    // Initialize — with a timeout so misconfigured agents (e.g. non-ACP CLIs)
+    // fail fast instead of hanging forever.
     let _ = event_tx.send(AppEvent::ConnectionStage("Initializing ACP...".to_string()));
     startup_probe.log("Initializing ACP");
-    let init_resp = conn
-        .initialize(
-            acp::InitializeRequest::new(acp::ProtocolVersion::V1)
-                .client_capabilities(acp::ClientCapabilities::new().terminal(true))
-                .client_info(
-                    acp::Implementation::new("wta", env!("CARGO_PKG_VERSION"))
-                        .title("Windows Terminal Agent"),
-                ),
-        )
+    let init_future = conn.initialize(
+        acp::InitializeRequest::new(acp::ProtocolVersion::V1)
+            .client_capabilities(acp::ClientCapabilities::new().terminal(true))
+            .client_info(
+                acp::Implementation::new("wta", env!("CARGO_PKG_VERSION"))
+                    .title("Windows Terminal Agent"),
+            ),
+    );
+    let init_resp = tokio::time::timeout(std::time::Duration::from_secs(15), init_future)
         .await
+        .map_err(|_| anyhow::anyhow!(
+            "ACP initialize timed out after 15 s — '{}' may not support the ACP protocol. \
+             Only ACP-capable agents (e.g. copilot, gemini) can be used as the ACP agent.",
+            raw_program
+        ))?
         .map_err(|e| anyhow::anyhow!("initialize failed: {}", e))?;
 
     // Log the agent's initialize response for debugging
     startup_probe.log(&format!("Agent init response received: {:?}", init_resp));
 
-    // Create session
+    // Create session — also with a timeout.
     let _ = event_tx.send(AppEvent::ConnectionStage("Creating session...".to_string()));
     startup_probe.log("Creating session");
     let cwd = std::env::current_dir().unwrap_or_default();
     startup_probe.log(&format!("Using session cwd={}", cwd.display()));
-    let session = conn
-        .new_session(acp::NewSessionRequest::new(cwd))
+    let session_future = conn.new_session(acp::NewSessionRequest::new(cwd));
+    let session = tokio::time::timeout(std::time::Duration::from_secs(15), session_future)
         .await
+        .map_err(|_| anyhow::anyhow!("new_session timed out after 15 s"))?
         .map_err(|e| anyhow::anyhow!("new_session failed: {}", e))?;
 
     let session_id = session.session_id.clone();
     startup_probe.log(&format!("Session created: {}", session_id));
 
-    if let Some(requested_model) = requested_model_id(args) {
+    if let Some(requested_model) = requested_model_id(raw_program, args) {
         let _ = event_tx.send(AppEvent::ConnectionStage(format!(
             "Selecting model {}...",
             requested_model
@@ -1541,7 +1517,7 @@ async fn run_inner(
     }
 
     // Notify app of connection
-    let (agent_name, agent_model) = summarize_agent_identity(program, args);
+    let (agent_name, agent_model) = summarize_agent_identity(raw_program, args);
     let _ = event_tx.send(AppEvent::AgentConnected {
         name: agent_name,
         model: agent_model,
@@ -1586,7 +1562,7 @@ async fn run_inner(
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_prompt_request, extract_model_arg, requested_model_id, summarize_agent_identity,
+        complete_prompt_request, requested_model_id, summarize_agent_identity,
         PromptTimingState,
     };
     use crate::app::AppEvent;
@@ -1594,8 +1570,12 @@ mod tests {
 
     #[test]
     fn parses_model_from_separate_flag() {
+        let profile = crate::agent_registry::lookup_profile("copilot");
         let args = ["--acp", "--stdio", "--model", "claude-haiku-4.5"];
-        assert_eq!(extract_model_arg(&args), Some("claude-haiku-4.5"));
+        assert_eq!(
+            crate::agent_registry::extract_model_from_args(&args, profile),
+            Some("claude-haiku-4.5")
+        );
     }
 
     #[test]
@@ -1620,7 +1600,7 @@ mod tests {
     fn requested_model_returns_owned_value() {
         let args = ["--acp", "--stdio", "--model", "claude-haiku-4.5"];
         assert_eq!(
-            requested_model_id(&args).as_deref(),
+            requested_model_id("copilot", &args).as_deref(),
             Some("claude-haiku-4.5")
         );
     }

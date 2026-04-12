@@ -1,3 +1,4 @@
+mod agent_registry;
 mod app;
 mod coordinator;
 mod event;
@@ -40,12 +41,20 @@ struct Cli {
     prompt: Option<String>,
 
     /// Agent CLI command (e.g. "copilot --acp --stdio")
-    #[arg(long, default_value = "copilot --acp --stdio")]
+    #[arg(long, default_value = agent_registry::DEFAULT_ACP_COMMAND)]
     agent: String,
 
     /// Delegate agent CLI command (e.g. "codex")
     #[arg(long)]
     delegate_agent: Option<String>,
+
+    /// Model override for the delegate agent
+    #[arg(long)]
+    delegate_model: Option<String>,
+
+    /// Disable auto-fix on command failure
+    #[arg(long)]
+    no_autofix: bool,
 
     // Legacy flags (hidden, backward compat)
     #[arg(long, hide = true)]
@@ -233,12 +242,16 @@ enum Command {
         prompt: String,
 
         /// Agent CLI command (used to derive delegate agent commandline)
-        #[arg(long, default_value = "copilot --acp --stdio")]
+        #[arg(long, default_value = agent_registry::DEFAULT_ACP_COMMAND)]
         agent: String,
 
         /// Delegate agent CLI command (e.g. "codex")
         #[arg(long)]
         delegate_agent: Option<String>,
+
+        /// Model override for the delegate agent
+        #[arg(long)]
+        delegate_model: Option<String>,
 
         /// Working directory for the delegate agent tab
         #[arg(long)]
@@ -493,7 +506,7 @@ async fn main() -> Result<()> {
         }) => {
             run_ensure_host(
                 &pipe_override,
-                agent.unwrap_or_else(|| "copilot --acp --stdio".to_string()),
+                agent.unwrap_or_else(|| agent_registry::DEFAULT_ACP_COMMAND.to_string()),
                 delegate_agent,
             )
             .await
@@ -504,10 +517,11 @@ async fn main() -> Result<()> {
             prompt,
             agent,
             delegate_agent,
+            delegate_model,
             cwd,
             source_pane,
         }) => {
-            run_delegate(&pipe_override, &prompt, &agent, delegate_agent.as_deref(), cwd.as_deref(), source_pane.as_deref()).await
+            run_delegate(&pipe_override, &prompt, &agent, delegate_agent.as_deref(), delegate_model.as_deref(), cwd.as_deref(), source_pane.as_deref()).await
         }
 
         // ── Quick pick ──
@@ -971,6 +985,7 @@ async fn run_delegate(
     prompt: &str,
     agent_cmd: &str,
     delegate_agent_cmd: Option<&str>,
+    delegate_model: Option<&str>,
     cwd: Option<&str>,
     source_pane: Option<&str>,
 ) -> Result<()> {
@@ -993,7 +1008,7 @@ async fn run_delegate(
     let shell_mgr = ShellManager::new()
         .with_wt_channel(Arc::new(channel) as Arc<dyn shell::wt_channel::WtChannel>);
 
-    match delegate_with_context(&shell_mgr, prompt, agent_cmd, delegate_agent_cmd, source_pane, cwd).await {
+    match delegate_with_context(&shell_mgr, prompt, agent_cmd, delegate_agent_cmd, delegate_model, source_pane, cwd).await {
         Ok(()) => { dlog("delegate OK"); Ok(()) }
         Err(e) => { dlog(&format!("delegate FAILED: {:#}", e)); Err(e) }
     }
@@ -1007,6 +1022,7 @@ async fn delegate_with_context(
     prompt: &str,
     agent_cmd: &str,
     delegate_agent_cmd: Option<&str>,
+    delegate_model: Option<&str>,
     source_pane_id: Option<&str>,
     cwd: Option<&str>,
 ) -> Result<()> {
@@ -1039,6 +1055,7 @@ async fn delegate_with_context(
     let delegate_agents = crate::coordinator::default_delegate_agent_runtimes(
         delegate_agent_cmd,
         Some(agent_cmd),
+        delegate_model,
     );
     let runtime = delegate_agents
         .first()
@@ -1160,11 +1177,12 @@ async fn run_ensure_host(
                         crate::coordinator::default_delegate_agent_runtimes(
                             delegate_for_recs.as_deref(),
                             Some(agent_for_recs.as_str()),
+                            None, // ensure-host doesn't have delegate model
                         );
                     let delegate_agent_id = delegate_agents
                         .first()
                         .map(|r| r.id.clone())
-                        .unwrap_or_else(|| "copilot".to_string());
+                        .unwrap_or_else(|| agent_registry::KNOWN_AGENTS[0].id.to_string());
                     tokio::spawn(crate::coordinator::run_recommendation_executor(
                         rec_rx,
                         evt_tx,
@@ -1622,6 +1640,7 @@ async fn run_acp_app(
             let delegate_agents = crate::coordinator::default_delegate_agent_runtimes(
                 cli.delegate_agent.as_deref(),
                 Some(cli.agent.as_str()),
+                cli.delegate_model.as_deref(),
             );
             tokio::spawn(crate::coordinator::run_recommendation_executor(
                 recommendation_rx,
@@ -1630,7 +1649,8 @@ async fn run_acp_app(
                 delegate_agents,
             ));
 
-            let mut app_state = app::App::new(prompt_tx, recommendation_tx, permission_tx, debug_capture_enabled, wt_connected, false);
+            let autofix_enabled = !cli.no_autofix;
+            let mut app_state = app::App::new(prompt_tx, recommendation_tx, permission_tx, debug_capture_enabled, wt_connected, false, autofix_enabled);
             if let Some((pane_id, tab_id, window_id)) = pane_identity {
                 app_state.pane_id = Some(pane_id);
                 app_state.tab_id = Some(tab_id);

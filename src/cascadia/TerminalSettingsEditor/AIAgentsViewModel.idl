@@ -1,0 +1,57 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
+import "EnumEntry.idl";
+
+#include "ViewModelHelpers.idl.h"
+
+namespace Microsoft.Terminal.Settings.Editor
+{
+    runtimeclass AgentEntry
+    {
+        AgentEntry(String id, String displayName, Boolean isInstalled);
+        String Id { get; };
+        String DisplayName { get; };
+        String DisplayLabel { get; };
+        Boolean IsInstalled { get; };
+        Boolean IsAddNew { get; };
+    }
+
+    runtimeclass AIAgentsViewModel : Windows.UI.Xaml.Data.INotifyPropertyChanged
+    {
+        AIAgentsViewModel(Microsoft.Terminal.Settings.Model.GlobalAppSettings globalSettings);
+
+        Windows.Foundation.Collections.IObservableVector<AgentEntry> AcpAgentList { get; };
+        Windows.Foundation.Collections.IObservableVector<AgentEntry> DelegateAgentList { get; };
+        AgentEntry CurrentAcpAgent;
+        AgentEntry CurrentDelegateAgent;
+
+        // Custom agent preview (read-only, shown on page load)
+        Boolean IsCustomAcpAgentSelected { get; };
+        String CustomAcpCommandPreview { get; };
+        void EditCustomAcpAgent();
+        Boolean IsCustomDelegateAgentSelected { get; };
+        String CustomDelegateCommandPreview { get; };
+        void EditCustomDelegateAgent();
+
+        // "Add New" inline editing state
+        Boolean IsAddingCustomAcpAgent { get; };
+        Boolean IsAddingCustomDelegateAgent { get; };
+        String CustomAcpCommand;
+        String CustomDelegateCommand;
+        void SaveCustomAcpAgent();
+        void SaveCustomDelegateAgent();
+        void CancelCustomAcpAgent();
+        void DeleteCustomAcpAgent();
+        void CancelCustomDelegateAgent();
+        void DeleteCustomDelegateAgent();
+
+        Boolean ShowAcpModel { get; };
+        PERMANENT_OBSERVABLE_PROJECTED_SETTING(String, AcpModel);
+        Boolean ShowDelegateModel { get; };
+        PERMANENT_OBSERVABLE_PROJECTED_SETTING(String, DelegateModel);
+        PERMANENT_OBSERVABLE_PROJECTED_SETTING(Boolean, AutoFixEnabled);
+
+        Int32 AgentPanePositionIndex;
+    }
+}
