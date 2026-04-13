@@ -1132,18 +1132,32 @@ namespace winrt::TerminalApp::implementation
             }
             else
             {
-                // No prompt — just focus the agent pane (e.g., user opened palette without typing).
+                // No prompt — toggle the agent pane visibility.
                 const auto activeTab = _GetFocusedTabImpl();
                 if (activeTab)
                 {
-                    if (const auto paneId = existingPane->Id())
+                    const auto rootPane = activeTab->GetRootPane();
+                    if (rootPane)
                     {
-                        activeTab->FocusPane(paneId.value());
+                        if (existingPane->IsHidden())
+                        {
+                            // Agent pane is hidden — restore it and focus.
+                            rootPane->RestorePane(existingPane);
+                            if (const auto paneId = existingPane->Id())
+                            {
+                                activeTab->FocusPane(paneId.value());
+                            }
+                            if (const auto existingControl = existingPane->GetTerminalControl())
+                            {
+                                existingControl.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+                            }
+                        }
+                        else
+                        {
+                            // Agent pane is visible — hide it.
+                            rootPane->HidePane(existingPane);
+                        }
                     }
-                }
-                if (const auto existingControl = existingPane->GetTerminalControl())
-                {
-                    existingControl.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
                 }
             }
             return;
@@ -1242,16 +1256,30 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
+        // Mark the pane as an agent pane so it cannot be split or swapped.
+        newPane->IsAgentPane(true);
         _agentPanes.push_back(newPane);
 
-        // 6. Split the active tab with the agent pane
+        // 6. Split at the root of the pane tree so the agent panel appears at
+        //    the edge of ALL panes, not just the active one.
         const auto& activeTab = _GetFocusedTabImpl();
+        if (!activeTab)
+        {
+            return;
+        }
         const auto positionSetting = _settings.GlobalSettings().AgentPanePosition();
         const auto splitDirection = (positionSetting == L"bottom")
                                         ? SplitDirection::Down
                                         : SplitDirection::Right;
 
-        _SplitPane(activeTab, splitDirection, 0.5f, newPane);
+        _UnZoomIfNeeded();
+        activeTab->SplitPaneAtRoot(splitDirection, newPane);
+
+        // Focus the new agent pane.
+        if (const auto& content{ newPane->GetContent() })
+        {
+            content.Focus(FocusState::Programmatic);
+        }
     }
 
     // Method Description:
@@ -3486,6 +3514,15 @@ namespace winrt::TerminalApp::implementation
         if (*activeTab == _settingsTab)
         {
             return;
+        }
+
+        // Agent panes are fixed panels and cannot be split.
+        if (const auto activePane = activeTab->GetActivePane())
+        {
+            if (activePane->IsAgentPane())
+            {
+                return;
+            }
         }
 
         // If the caller is calling us with the return value of _MakePane

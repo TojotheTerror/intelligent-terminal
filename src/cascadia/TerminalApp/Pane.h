@@ -164,6 +164,10 @@ public:
 
     bool ContainsReadOnly() const;
 
+    bool IsAgentPane() const noexcept;
+    void IsAgentPane(bool value) noexcept;
+    bool IsHidden() const noexcept { return _hidden; }
+
     void EnableBroadcast(bool enabled);
     void BroadcastKey(const winrt::Microsoft::Terminal::Control::TermControl& sourceControl, const WORD vkey, const WORD scanCode, const winrt::Microsoft::Terminal::Core::ControlKeyStates modifiers, const bool keyDown);
     void BroadcastChar(const winrt::Microsoft::Terminal::Control::TermControl& sourceControl, const wchar_t vkey, const WORD scanCode, const winrt::Microsoft::Terminal::Core::ControlKeyStates modifiers);
@@ -282,6 +286,7 @@ private:
     bool _zoomed{ false };
     bool _hidden{ false };
     bool _broadcastEnabled{ false };
+    bool _isAgentPane{ false };
 
     bool _IsLeaf() const noexcept;
     bool _HasFocusedChild() const noexcept;

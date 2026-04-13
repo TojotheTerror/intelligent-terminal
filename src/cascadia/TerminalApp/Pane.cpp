@@ -135,6 +135,20 @@ Pane::BuildStartupState Pane::BuildStartupActions(uint32_t currentId, uint32_t n
         return { .args = {}, .firstPane = shared_from_this(), .focusedPaneId = std::nullopt, .panesCreated = 0 };
     }
 
+    // If one of our children is an agent pane, skip it entirely and serialize
+    // only the non-agent subtree. Agent panes are transient and not persisted.
+    if (_firstChild && _secondChild)
+    {
+        if (_secondChild->_isAgentPane)
+        {
+            return _firstChild->BuildStartupActions(currentId, nextId, kind);
+        }
+        if (_firstChild->_isAgentPane)
+        {
+            return _secondChild->BuildStartupActions(currentId, nextId, kind);
+        }
+    }
+
     auto buildSplitPane = [&](auto newPane) {
         ActionAndArgs actionAndArgs;
         actionAndArgs.Action(ShortcutAction::SplitPane);
@@ -589,6 +603,12 @@ bool Pane::SwapPanes(std::shared_ptr<Pane> first, std::shared_ptr<Pane> second)
 {
     // If there is nothing to swap, just return.
     if (first == second || _IsLeaf())
+    {
+        return false;
+    }
+
+    // Agent panes are fixed and cannot be swapped.
+    if (first->_isAgentPane || second->_isAgentPane)
     {
         return false;
     }
@@ -2187,6 +2207,12 @@ std::pair<std::shared_ptr<Pane>, std::shared_ptr<Pane>> Pane::Split(SplitDirecti
                                                                     const float splitSize,
                                                                     std::shared_ptr<Pane> newPane)
 {
+    // Agent panes are fixed and cannot be split.
+    if (_isAgentPane)
+    {
+        return { nullptr, nullptr };
+    }
+
     if (!_lastActive)
     {
         if (_firstChild && _firstChild->_HasFocusedChild())
@@ -2214,6 +2240,12 @@ bool Pane::ToggleSplitOrientation()
 {
     // If we are a leaf there is no split to toggle.
     if (_IsLeaf())
+    {
+        return false;
+    }
+
+    // Don't toggle orientation on the root split that contains an agent pane.
+    if (_firstChild->_isAgentPane || _secondChild->_isAgentPane)
     {
         return false;
     }
@@ -3093,6 +3125,16 @@ bool Pane::ContainsReadOnly() const
                        (_firstChild->ContainsReadOnly() || _secondChild->ContainsReadOnly());
 }
 
+bool Pane::IsAgentPane() const noexcept
+{
+    return _isAgentPane;
+}
+
+void Pane::IsAgentPane(bool value) noexcept
+{
+    _isAgentPane = value;
+}
+
 // Method Description:
 // - If we're a parent, place the taskbar state for all our leaves into the
 //   provided vector.
@@ -3118,6 +3160,10 @@ void Pane::CollectTaskbarStates(std::vector<winrt::TerminalApp::TaskbarState>& s
 
 void Pane::EnableBroadcast(bool enabled)
 {
+    if (_isAgentPane)
+    {
+        return;
+    }
     if (_IsLeaf())
     {
         _broadcastEnabled = enabled;
@@ -3143,6 +3189,10 @@ void Pane::BroadcastKey(const winrt::Microsoft::Terminal::Control::TermControl& 
                         const bool keyDown)
 {
     WalkTree([&](const auto& pane) {
+        if (pane->_isAgentPane)
+        {
+            return;
+        }
         if (const auto& termControl{ pane->GetTerminalControl() })
         {
             if (termControl != sourceControl && !termControl.ReadOnly())
@@ -3159,6 +3209,10 @@ void Pane::BroadcastChar(const winrt::Microsoft::Terminal::Control::TermControl&
                          const winrt::Microsoft::Terminal::Core::ControlKeyStates modifiers)
 {
     WalkTree([&](const auto& pane) {
+        if (pane->_isAgentPane)
+        {
+            return;
+        }
         if (const auto& termControl{ pane->GetTerminalControl() })
         {
             if (termControl != sourceControl && !termControl.ReadOnly())
@@ -3173,6 +3227,10 @@ void Pane::BroadcastString(const winrt::Microsoft::Terminal::Control::TermContro
                            const winrt::hstring& text)
 {
     WalkTree([&](const auto& pane) {
+        if (pane->_isAgentPane)
+        {
+            return;
+        }
         if (const auto& termControl{ pane->GetTerminalControl() })
         {
             if (termControl != sourceControl && !termControl.ReadOnly())

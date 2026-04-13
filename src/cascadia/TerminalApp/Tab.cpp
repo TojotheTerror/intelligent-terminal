@@ -669,6 +669,48 @@ namespace winrt::TerminalApp::implementation
     }
 
     // Method Description:
+    // - Splits the root pane of this tab, placing the new pane at the edge of
+    //   the entire pane tree. This is used for the agent pane so it appears at
+    //   the bottom/right of ALL panes, not just the active pane.
+    // Arguments:
+    // - splitType: The direction to split (Down, Right, etc.)
+    // - pane: The new pane to add at the root level
+    // Return Value:
+    // - a pair of (the Pane wrapping the original tree, the new Pane)
+    std::pair<std::shared_ptr<Pane>, std::shared_ptr<Pane>> Tab::SplitPaneAtRoot(SplitDirection splitType,
+                                                                                  std::shared_ptr<Pane> pane)
+    {
+        ASSERT_UI_THREAD();
+
+        // Add the new event handlers to the new pane(s) and update their ids.
+        pane->WalkTree([&](const auto& p) {
+            _AttachEventHandlersToPane(p);
+            if (p->_IsLeaf())
+            {
+                p->Id(_nextPaneId);
+                if (const auto& content{ p->GetContent() })
+                {
+                    _AttachEventHandlersToContent(p->Id().value(), content);
+                }
+                _nextPaneId++;
+            }
+            return false;
+        });
+        pane->EnableBroadcast(_tabStatus.IsInputBroadcastActive());
+
+        // AttachPane splits the root pane in-place: the existing tree becomes
+        // _firstChild and the new pane becomes _secondChild. Because _rootPane
+        // is modified in-place, Content() (which points to _rootPane->GetRootElement())
+        // remains valid without any re-parenting.
+        auto originalTree = _rootPane->AttachPane(pane, splitType);
+
+        // After split, Close Pane Menu Item should be visible
+        _closePaneMenuItem.Visibility(WUX::Visibility::Visible);
+
+        return { originalTree, pane };
+    }
+
+    // Method Description:
     // - Removes the currently active pane from this tab. If that was the only
     //   remaining pane, then the entire tab is closed as well.
     // Arguments:
@@ -1987,6 +2029,12 @@ namespace winrt::TerminalApp::implementation
     void Tab::EnterZoom()
     {
         ASSERT_UI_THREAD();
+
+        // Agent panes are fixed panels and should not be zoomed.
+        if (_activePane && _activePane->IsAgentPane())
+        {
+            return;
+        }
 
         // Clear the content first, because with parent focusing it is possible
         // to zoom the root pane, but setting the content will not trigger the
