@@ -25,16 +25,34 @@ pub struct PromptSubmission {
     pub text: String,
     pub pane_context: Option<PaneContext>,
     pub submitted_at_unix_s: f64,
+    /// True when this prompt was synthesized by the auto-fix flow rather
+    /// than typed by a human. The host uses this to skip broadcasting it
+    /// as a User message (the client already shows the error line), and
+    /// the planner uses it to pick the auto-fix prompt template.
+    pub is_autofix: bool,
 }
 
 impl PromptSubmission {
     pub fn new(text: String, pane_context: Option<PaneContext>) -> Self {
+        Self::new_with_kind(text, pane_context, false)
+    }
+
+    pub fn new_autofix(text: String, pane_context: Option<PaneContext>) -> Self {
+        Self::new_with_kind(text, pane_context, true)
+    }
+
+    fn new_with_kind(
+        text: String,
+        pane_context: Option<PaneContext>,
+        is_autofix: bool,
+    ) -> Self {
         static NEXT_PROMPT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             id: NEXT_PROMPT_ID.fetch_add(1, Ordering::Relaxed),
             text,
             pane_context,
             submitted_at_unix_s: now_unix_s(),
+            is_autofix,
         }
     }
 
@@ -43,12 +61,14 @@ impl PromptSubmission {
         text: String,
         pane_context: Option<PaneContext>,
         submitted_at_unix_s: f64,
+        is_autofix: bool,
     ) -> Self {
         Self {
             id,
             text,
             pane_context,
             submitted_at_unix_s,
+            is_autofix,
         }
     }
 
@@ -792,14 +812,13 @@ async fn build_prompt_text(
     prompt_id: u64,
     submitted_at_unix_s: f64,
     user_text: &str,
+    is_autofix: bool,
     shell_mgr: &ShellManager,
     wt_connected: bool,
     pane_context: Option<&PaneContext>,
 ) -> (String, String, String) {
     let total_started = std::time::Instant::now();
     let mut runtime_sections = Vec::new();
-
-    let is_autofix = user_text.starts_with("[auto-fix]");
 
     let template_started = std::time::Instant::now();
     let planner_template = if is_autofix {
@@ -1536,6 +1555,7 @@ async fn run_inner(
             prompt.id,
             prompt.submitted_at_unix_s,
             &prompt.text,
+            prompt.is_autofix,
             &shell_mgr,
             wt_connected,
             prompt.pane_context.as_ref(),

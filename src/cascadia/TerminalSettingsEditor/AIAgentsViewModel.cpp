@@ -6,6 +6,7 @@
 #include "AIAgentsViewModel.g.cpp"
 #include "AgentEntry.g.cpp"
 #include "EnumEntry.h"
+#include "../inc/AgentRegistry.h"
 
 using namespace winrt::Windows::Foundation;
 using namespace winrt::Windows::Foundation::Collections;
@@ -110,20 +111,30 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     AIAgentsViewModel::AIAgentsViewModel(Model::GlobalAppSettings globalSettings) :
         _GlobalSettings{ globalSettings }
     {
-        // ACP-capable agents
+        namespace Reg = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
+
+        // ACP-capable agents (shared list — see inc/AgentRegistry.h).
         std::vector<Editor::AgentEntry> acpEntries;
-        acpEntries.push_back(winrt::make<AgentEntry>(L"copilot", L"GitHub Copilot", _IsAgentInstalled(L"copilot")));
-        acpEntries.push_back(winrt::make<AgentEntry>(L"gemini", L"Gemini", _IsAgentInstalled(L"gemini")));
+        for (const auto& a : Reg::BuiltinAcpAgents)
+        {
+            acpEntries.push_back(winrt::make<AgentEntry>(
+                winrt::hstring{ a.id },
+                winrt::hstring{ a.displayName },
+                _IsAgentInstalled(std::wstring{ a.id }.c_str())));
+        }
         _acpAgentList = winrt::single_threaded_observable_vector(std::move(acpEntries));
         _MaybeAppendCustomEntry(_acpAgentList, _GlobalSettings.AcpCustomCommand(), _GlobalSettings.AcpAgent());
         _AppendAddNewEntry(_acpAgentList);
 
-        // All known agents for delegation
+        // Delegate agents (shared list — see inc/AgentRegistry.h).
         std::vector<Editor::AgentEntry> delegateEntries;
-        delegateEntries.push_back(winrt::make<AgentEntry>(L"copilot", L"GitHub Copilot", _IsAgentInstalled(L"copilot")));
-        delegateEntries.push_back(winrt::make<AgentEntry>(L"claude", L"Claude", _IsAgentInstalled(L"claude")));
-        delegateEntries.push_back(winrt::make<AgentEntry>(L"codex", L"Codex", _IsAgentInstalled(L"codex")));
-        delegateEntries.push_back(winrt::make<AgentEntry>(L"gemini", L"Gemini", _IsAgentInstalled(L"gemini")));
+        for (const auto& a : Reg::BuiltinDelegateAgents)
+        {
+            delegateEntries.push_back(winrt::make<AgentEntry>(
+                winrt::hstring{ a.id },
+                winrt::hstring{ a.displayName },
+                _IsAgentInstalled(std::wstring{ a.id }.c_str())));
+        }
         _delegateAgentList = winrt::single_threaded_observable_vector(std::move(delegateEntries));
         _MaybeAppendCustomEntry(_delegateAgentList, _GlobalSettings.DelegateCustomCommand(), _GlobalSettings.DelegateAgent());
         _AppendAddNewEntry(_delegateAgentList);

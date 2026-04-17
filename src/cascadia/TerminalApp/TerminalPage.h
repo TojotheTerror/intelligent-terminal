@@ -330,6 +330,28 @@ namespace winrt::TerminalApp::implementation
         void _EnsureAgentHostStarted();
         void _AutoCreateHiddenAgentPane(winrt::com_ptr<Tab> tab);
 
+        // Hot-reload of agent/model settings. Snapshot is captured on first
+        // SetSettings and after every rebuild; a diff drives teardown/rebuild
+        // of the pane(s) + host.
+        struct AgentSettingsSnapshot
+        {
+            std::wstring acpAgent;
+            std::wstring acpModel;
+            std::wstring acpCustomCommand;
+            std::wstring delegateAgent;
+            std::wstring delegateModel;
+            std::wstring delegateCustomCommand;
+        };
+        AgentSettingsSnapshot _lastAgentSettings{};
+        bool _agentSettingsSnapshotInitialized{ false };
+        bool _agentRebuilding{ false };
+        AgentSettingsSnapshot _CaptureAgentSettingsSnapshot() const;
+        static bool _AgentSettingsChanged(const AgentSettingsSnapshot& a, const AgentSettingsSnapshot& b);
+        static bool _AgentHostAffectingChange(const AgentSettingsSnapshot& a, const AgentSettingsSnapshot& b);
+        void _TeardownAgentPanes();
+        void _TeardownAgentHost();
+        void _RebuildAgentStack();
+
         winrt::Windows::UI::Xaml::Controls::TextBox::LayoutUpdated_revoker _renamerLayoutUpdatedRevoker;
         int _renamerLayoutCount{ 0 };
         bool _renamerPressedEnter{ false };

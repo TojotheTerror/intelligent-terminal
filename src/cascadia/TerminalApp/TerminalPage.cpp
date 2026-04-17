@@ -14,6 +14,7 @@
 
 #include "../../types/inc/ColorFix.hpp"
 #include "../../types/inc/utils.hpp"
+#include "../inc/AgentRegistry.h"
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
 #include "App.h"
 #include "DebugTapConnection.h"
@@ -1188,6 +1189,17 @@ namespace winrt::TerminalApp::implementation
             cmdline += fmt::format(FMT_COMPILE(L" --delegate-agent \"{}\""), delegateStr);
         }
 
+        const auto delegateModel = globals.DelegateModel();
+        if (!delegateModel.empty())
+        {
+            std::wstring modelStr{ delegateModel };
+            for (size_t pos = 0; (pos = modelStr.find(L'"', pos)) != std::wstring::npos; pos += 2)
+            {
+                modelStr.replace(pos, 1, L"\"\"");
+            }
+            cmdline += fmt::format(FMT_COMPILE(L" --delegate-model \"{}\""), modelStr);
+        }
+
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
@@ -1236,6 +1248,195 @@ namespace winrt::TerminalApp::implementation
                 _agentHostJob = nullptr;
             }
         }
+    }
+
+    // --- Hot-reload of agent/model settings -------------------------------
+    //
+    // The agent stack is composed of three layers whose lifetimes differ:
+    //   A. Settings (hot-swappable)
+    //   B. Shared WTA host process (per window, started once)
+    //   C. Agent panes (per tab, ConPTY running `wta attach`), each of which
+    //      spawns an AcpConnection → agent CLI subprocess with the model flag
+    //      baked into argv at spawn time.
+    //
+    // When any of the 6 agent-identity settings change, layers B+C must be
+    // torn down and rebuilt. `_RebuildAgentStack` is the single entry point;
+    // it is called from SetSettings (covers settings.json reload + Settings UI
+    // writes) and from the bottom-bar selector Click handler (covers direct
+    // in-memory mutations that don't round-trip through settings.json).
+    TerminalPage::AgentSettingsSnapshot TerminalPage::_CaptureAgentSettingsSnapshot() const
+    {
+        const auto& globals = _settings.GlobalSettings();
+        return AgentSettingsSnapshot{
+            std::wstring{ globals.AcpAgent() },
+            std::wstring{ globals.AcpModel() },
+            std::wstring{ globals.AcpCustomCommand() },
+            std::wstring{ globals.DelegateAgent() },
+            std::wstring{ globals.DelegateModel() },
+            std::wstring{ globals.DelegateCustomCommand() },
+        };
+    }
+
+    bool TerminalPage::_AgentSettingsChanged(const AgentSettingsSnapshot& a, const AgentSettingsSnapshot& b)
+    {
+        return a.acpAgent != b.acpAgent ||
+               a.acpModel != b.acpModel ||
+               a.acpCustomCommand != b.acpCustomCommand ||
+               a.delegateAgent != b.delegateAgent ||
+               a.delegateModel != b.delegateModel ||
+               a.delegateCustomCommand != b.delegateCustomCommand;
+    }
+
+    // Fields that participate in the shared-host pipe-name hash (see
+    // wta/src/main.rs shared_host::pipe_name_for — currently agent_cmd +
+    // delegate_agent_cmd). If any of these changed, the old host is pointing
+    // at a stale pipe name and must be restarted; a pure model swap does not
+    // require host restart.
+    bool TerminalPage::_AgentHostAffectingChange(const AgentSettingsSnapshot& a, const AgentSettingsSnapshot& b)
+    {
+        return a.acpAgent != b.acpAgent ||
+               a.acpCustomCommand != b.acpCustomCommand ||
+               a.delegateAgent != b.delegateAgent ||
+               a.delegateCustomCommand != b.delegateCustomCommand;
+    }
+
+    // Close every tracked agent pane across all tabs. Pane::Close() tears
+    // down the content (ConPTY, AcpConnection, agent subprocess) and raises
+    // the Closed event which removes the pane node from its tab's tree.
+    // The weak_ptrs in _agentPanes are pruned lazily by _FindAgentPaneInCurrentTab.
+    void TerminalPage::_TeardownAgentPanes()
+    {
+        std::vector<std::shared_ptr<Pane>> alive;
+        alive.reserve(_agentPanes.size());
+        for (auto& weak : _agentPanes)
+        {
+            if (auto p = weak.lock())
+            {
+                alive.push_back(std::move(p));
+            }
+        }
+        _agentPaneLog("_TeardownAgentPanes: closing " + std::to_string(alive.size()) + " pane(s)");
+        for (auto& p : alive)
+        {
+            p->Close();
+        }
+        _agentPanes.clear();
+    }
+
+    // Kill the shared WTA host process (the one launched by
+    // _EnsureAgentHostStarted) and reset state so it can be re-launched with
+    // the current settings.
+    void TerminalPage::_TeardownAgentHost()
+    {
+        _agentPaneLog("_TeardownAgentHost: tearing down shared host");
+        if (_agentHostProcess)
+        {
+            TerminateProcess(_agentHostProcess, 0);
+            CloseHandle(_agentHostProcess);
+            _agentHostProcess = nullptr;
+        }
+        if (_agentHostJob)
+        {
+            CloseHandle(_agentHostJob);
+            _agentHostJob = nullptr;
+        }
+        _agentHostStarted = false;
+    }
+
+    // Called whenever agent-identity settings may have changed. Diffs the
+    // last known snapshot against the current one, tears down + rebuilds
+    // the affected layers, and updates the snapshot.
+    void TerminalPage::_RebuildAgentStack()
+    {
+        const auto current = _CaptureAgentSettingsSnapshot();
+
+        {
+            std::string diag = "_RebuildAgentStack: entered. current.acp=";
+            diag += winrt::to_string(current.acpAgent);
+            diag += " last.acp=";
+            diag += winrt::to_string(_lastAgentSettings.acpAgent);
+            diag += " current.model=";
+            diag += winrt::to_string(current.acpModel);
+            diag += " last.model=";
+            diag += winrt::to_string(_lastAgentSettings.acpModel);
+            diag += " current.delegate=";
+            diag += winrt::to_string(current.delegateAgent);
+            diag += " last.delegate=";
+            diag += winrt::to_string(_lastAgentSettings.delegateAgent);
+            diag += " initialized=";
+            diag += (_agentSettingsSnapshotInitialized ? "true" : "false");
+            diag += " rebuilding=";
+            diag += (_agentRebuilding ? "true" : "false");
+            _agentPaneLog(diag);
+        }
+
+        // First call just seeds the snapshot — there's nothing to rebuild.
+        if (!_agentSettingsSnapshotInitialized)
+        {
+            _lastAgentSettings = current;
+            _agentSettingsSnapshotInitialized = true;
+            _agentPaneLog("_RebuildAgentStack: seeded snapshot, skip rebuild");
+            return;
+        }
+
+        if (!_AgentSettingsChanged(_lastAgentSettings, current))
+        {
+            _agentPaneLog("_RebuildAgentStack: no change, skip rebuild");
+            return;
+        }
+
+        // Re-entrancy guard: if we're already rebuilding and a new trigger
+        // arrives (e.g. the user clicked the selector again mid-teardown),
+        // drop the new trigger. When the current rebuild finishes it will
+        // re-read settings, so the latest values win anyway.
+        if (_agentRebuilding)
+        {
+            _agentPaneLog("_RebuildAgentStack: already rebuilding, skipping nested trigger");
+            return;
+        }
+        _agentRebuilding = true;
+        auto guard = wil::scope_exit([this]() noexcept { _agentRebuilding = false; });
+
+        _agentPaneLog("_RebuildAgentStack: agent settings changed, rebuilding");
+
+        // Remember whether the current tab had a visible agent pane, so we
+        // can restore that state after rebuild.
+        bool hadVisiblePane = false;
+        bool hadAnyPane = false;
+        if (const auto existingPane = _FindAgentPaneInCurrentTab())
+        {
+            hadAnyPane = true;
+            hadVisiblePane = !existingPane->IsHidden();
+        }
+
+        _TeardownAgentPanes();
+
+        if (_AgentHostAffectingChange(_lastAgentSettings, current))
+        {
+            _TeardownAgentHost();
+        }
+
+        _lastAgentSettings = current;
+
+        // Re-ensure the shared host under the new settings. Safe to call
+        // when it is already running — the guard short-circuits.
+        _EnsureAgentHostStarted();
+
+        // If the focused tab previously had an agent pane, recreate it.
+        // _AutoCreateHiddenAgentPane starts it hidden; if it was visible
+        // before, call _OpenOrReuseAgentPane to toggle it back to visible.
+        if (hadAnyPane)
+        {
+            if (auto tab = _GetFocusedTabImpl())
+            {
+                _AutoCreateHiddenAgentPane(tab);
+                if (hadVisiblePane)
+                {
+                    _OpenOrReuseAgentPane(L"");
+                }
+            }
+        }
+        _UpdateBottomBarState();
     }
 
     // Auto-create a hidden agent pane in a newly-created tab so WTA
@@ -1483,9 +1684,39 @@ namespace winrt::TerminalApp::implementation
                                 _priorPaneId = activePane->Id();
                             }
 
+                            // Capture which non-agent TermControls are currently
+                            // pinned to the buffer bottom. Restoring the agent
+                            // pane shrinks the sibling pane; without a follow-up
+                            // scroll, the viewport stays top-anchored and the
+                            // latest output gets clipped.
+                            std::vector<winrt::Microsoft::Terminal::Control::TermControl> wasAtBottom;
+                            rootPane->WalkTree([&](const std::shared_ptr<Pane>& p) {
+                                if (p->IsAgentPane())
+                                {
+                                    return;
+                                }
+                                const auto ctl = p->GetTerminalControl();
+                                if (!ctl)
+                                {
+                                    return;
+                                }
+                                if (ctl.ScrollOffset() + ctl.ViewHeight() >= ctl.BufferHeight())
+                                {
+                                    wasAtBottom.push_back(ctl);
+                                }
+                            });
+
                             // Agent pane is hidden — restore it and focus.
                             _agentPaneLog("toggle: restoring hidden agent pane");
                             rootPane->RestorePane(existingPane);
+
+                            // Re-pin any pane that was at the bottom before the
+                            // resize so the latest output stays visible.
+                            for (auto& ctl : wasAtBottom)
+                            {
+                                ctl.ScrollViewport(ctl.BufferHeight());
+                            }
+
                             if (const auto paneId = existingPane->Id())
                             {
                                 activeTab->FocusPane(paneId.value());
@@ -2872,35 +3103,37 @@ namespace winrt::TerminalApp::implementation
                     item.Icon(icon);
                 }
                 item.Click([this, value](const auto&, const auto&) {
+                    _agentPaneLog(std::string("agent_selector_click: value=") + winrt::to_string(value));
                     auto globals2 = _settings.GlobalSettings();
+                    const auto before = winrt::to_string(globals2.AcpAgent());
                     globals2.AcpAgent(value);
+                    const auto after = winrt::to_string(globals2.AcpAgent());
+                    _agentPaneLog("agent_selector_click: AcpAgent before=" + before + " after=" + after);
                     // Update the selector text
                     if (auto selectorText = AgentSelectorText())
                     {
                         selectorText.Text(value);
                     }
-                    // Close and recreate the agent pane with the new agent
-                    if (const auto existingPane = _FindAgentPaneInCurrentTab())
-                    {
-                        if (const auto tab = _GetFocusedTabImpl())
-                        {
-                            const auto rootPane = tab->GetRootPane();
-                            if (rootPane)
-                            {
-                                rootPane->HidePane(existingPane);
-                            }
-                        }
-                    }
-                    _OpenOrReuseAgentPane(L"");
-                    _UpdateBottomBarState();
+                    // Persist the change to settings.json so it survives
+                    // restarts. WriteSettingsToDisk serializes the current
+                    // in-memory settings and writes them back.
+                    _settings.WriteSettingsToDisk();
+                    _agentPaneLog("agent_selector_click: WriteSettingsToDisk done");
+                    // Apply the change now: teardown existing agent panes +
+                    // shared host and respawn with the new agent.
+                    _RebuildAgentStack();
+                    _agentPaneLog("agent_selector_click: _RebuildAgentStack returned");
                 });
                 flyout.Items().Append(item);
             };
 
-            // Always offer built-in agent names. Users can install them later.
-            addItem(L"Copilot", L"copilot");
-            addItem(L"Claude", L"claude");
-            addItem(L"Gemini", L"gemini");
+            // Built-in ACP-capable agents (shared list — see
+            // inc/AgentRegistry.h). Settings UI uses the same source.
+            namespace Reg = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
+            for (const auto& a : Reg::BuiltinAcpAgents)
+            {
+                addItem(winrt::hstring{ a.displayName }, winrt::hstring{ a.id });
+            }
 
             if (!globals.AcpCustomCommand().empty())
             {
@@ -5324,8 +5557,13 @@ namespace winrt::TerminalApp::implementation
         TitleChanged.raise(*this, nullptr);
 
         // Reposition existing agent panes if the position setting changed.
-        // Other ACP agent/model/delegate settings still take effect on next launch.
         _RepositionAgentPanes();
+
+        // If any of the agent-identity settings (agent / model / custom
+        // command for either ACP or delegate) changed, tear down and
+        // recreate the affected layers so the new values take effect
+        // without a terminal restart.
+        _RebuildAgentStack();
     }
 
     void TerminalPage::_updateAllTabCloseButtons()

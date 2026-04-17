@@ -16,17 +16,24 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         let is_selected = idx == app.selected_recommendation;
         let is_recommended = recommendations.recommended_choice == Some(choice.choice);
 
-        // Title line: "* 1. Install missing build tools" or "  2. Explain further"
-        let marker = if is_recommended { "* " } else { "  " };
+        // Title line: green ● marks the recommended fix, others get indent.
+        // Example: "● 1. Install missing build tools" or "  2. Explain further"
         let title_style = if is_selected {
             theme::RECOMMENDATION_TITLE
         } else {
             theme::RECOMMENDATION_DETAIL
         };
-        lines.push(Line::from(Span::styled(
-            format!("{}{}. {}", marker, choice.choice, choice.title),
+        let mut title_spans: Vec<Span> = Vec::new();
+        if is_recommended {
+            title_spans.push(Span::styled("● ", theme::DOT_AGENT));
+        } else {
+            title_spans.push(Span::raw("  "));
+        }
+        title_spans.push(Span::styled(
+            format!("{}. {}", choice.choice, choice.title),
             title_style,
-        )));
+        ));
+        lines.push(Line::from(title_spans));
 
         // Determine card content based on action type
         let (command_text, buttons) = extract_card_content(choice, app, is_selected);

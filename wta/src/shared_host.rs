@@ -85,6 +85,8 @@ pub enum HostClientRequest {
         submitted_at_unix_s: f64,
         text: String,
         pane_context: Option<PaneContext>,
+        #[serde(default)]
+        is_autofix: bool,
     },
     SelectRecommendation {
         choice: usize,
@@ -529,6 +531,7 @@ async fn run_attach_client_inner(
                 submitted_at_unix_s: prompt.submitted_at_unix_s,
                 text: prompt.text,
                 pane_context: Some(pane_context.clone()),
+                is_autofix: prompt.is_autofix,
             },
         )
         .await?;
@@ -598,6 +601,7 @@ async fn run_attach_client_inner(
                         submitted_at_unix_s: prompt.submitted_at_unix_s,
                         text: prompt.text,
                         pane_context: Some(effective_context),
+                        is_autofix: prompt.is_autofix,
                     },
                 ).await?;
             }
@@ -870,6 +874,7 @@ fn handle_host_command(
                 submitted_at_unix_s,
                 text,
                 pane_context,
+                is_autofix,
             } => {
                 if text.trim().is_empty() {
                     return;
@@ -891,7 +896,14 @@ fn handle_host_command(
                     effective_context.clone(),
                     submitted_at_unix_s,
                 );
-                broadcast_event(clients, &SharedUiEvent::UserMessage { text: text.clone() });
+                // Auto-fix prompts are synthesized by the client when a
+                // command fails — the client already renders its own
+                // ChatMessage::Error with a red dot, so don't broadcast
+                // them as a User message (avoids the "> ... Diagnose the
+                // error ..." header line).
+                if !is_autofix {
+                    broadcast_event(clients, &SharedUiEvent::UserMessage { text: text.clone() });
+                }
                 prompt_timing_log(
                     prompt_id,
                     submitted_at_unix_s,
@@ -902,7 +914,8 @@ fn handle_host_command(
                             prompt_id,
                             text.clone(),
                             None,
-                            submitted_at_unix_s
+                            submitted_at_unix_s,
+                            is_autofix,
                         )
                         .preview()
                     ),
@@ -913,6 +926,7 @@ fn handle_host_command(
                         text,
                         effective_context,
                         submitted_at_unix_s,
+                        is_autofix,
                     ))
                     .is_err()
                 {

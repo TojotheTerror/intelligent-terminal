@@ -233,6 +233,10 @@ enum Command {
         /// Delegate agent CLI command
         #[arg(long)]
         delegate_agent: Option<String>,
+
+        /// Model override for the delegate agent
+        #[arg(long)]
+        delegate_model: Option<String>,
     },
 
     /// Attach to a running shared host (lightweight agent pane TUI)
@@ -515,11 +519,13 @@ async fn main() -> Result<()> {
         Some(Command::EnsureHost {
             agent,
             delegate_agent,
+            delegate_model,
         }) => {
             run_ensure_host(
                 &pipe_override,
                 agent.unwrap_or_else(|| agent_registry::DEFAULT_ACP_COMMAND.to_string()),
                 delegate_agent,
+                delegate_model,
             )
             .await
         }
@@ -1101,6 +1107,7 @@ async fn run_ensure_host(
     po: &PipeOverride,
     agent_cmd: String,
     delegate_agent_cmd: Option<String>,
+    delegate_model: Option<String>,
 ) -> Result<()> {
     fn host_log(msg: &str) {
         use std::io::Write;
@@ -1174,6 +1181,7 @@ async fn run_ensure_host(
                 let sm = Arc::clone(&shell_mgr);
                 let agent_for_recs = agent_cmd.clone();
                 let delegate_for_recs = delegate_agent_cmd.clone();
+                let delegate_model_for_recs = delegate_model.clone();
                 tokio::task::spawn_local(async move {
                     // Create a recommendation executor for delegation.
                     let (rec_tx, rec_rx) =
@@ -1183,7 +1191,7 @@ async fn run_ensure_host(
                         crate::coordinator::default_delegate_agent_runtimes(
                             delegate_for_recs.as_deref(),
                             Some(agent_for_recs.as_str()),
-                            None, // ensure-host doesn't have delegate model
+                            delegate_model_for_recs.as_deref(),
                         );
                     let delegate_agent_id = delegate_agents
                         .first()

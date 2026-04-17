@@ -180,10 +180,14 @@ fn classify_wt_event(method: &str, pane_id: &str, params: &serde_json::Value) ->
                         .and_then(|s| s.trim().parse::<i32>().ok())
                         .unwrap_or(-1);
                     if exit_code != 0 {
+                        // TODO: fetch the actual command text via
+                        // wt_read_pane_output(pane_id) and include it here
+                        // (e.g. "`ls /nope` failed (exit 1)"). That requires
+                        // an async hop; for now surface just the exit code.
                         return WtNotification {
                             severity: WtEventSeverity::Actionable,
                             pane_id: pane_id.to_string(),
-                            summary: format!("Pane {}: command failed (exit {})", pane_id, exit_code),
+                            summary: format!("Command failed (exit {})", exit_code),
                             acknowledged: false,
                             age_ticks: 0,
                         };
@@ -863,11 +867,9 @@ impl App {
                             return;
                         }
 
-                        self.messages
-                            .push(ChatMessage::System(notification.summary.clone()));
+                        // maybe_trigger_autofix pushes ChatMessage::Error (red dot)
+                        // itself — don't double-push here as a System message.
                         self.show_notification_banner = true;
-                        self.scroll_to_bottom();
-
                         self.maybe_trigger_autofix(&notification);
                     }
                     WtEventSeverity::Informational => {
@@ -1313,8 +1315,11 @@ impl App {
             return;
         }
 
+        // The auto-fix kind is carried by PromptSubmission::is_autofix,
+        // so the text doesn't need a marker prefix — just the raw error
+        // summary + instruction.
         let prompt_text = format!(
-            "[auto-fix] {}\nDiagnose the error and suggest a fix.",
+            "{}\nDiagnose the error and suggest a fix.",
             notification.summary
         );
 
@@ -1330,10 +1335,21 @@ impl App {
         // Store the failing pane ID so we can auto-fill `parent` on execution.
         self.autofix_pane_id = Some(notification.pane_id.clone());
 
-        self.prepare_for_new_prompt(&prompt_text);
+        // Push the error line (red dot) so the user sees it directly. We
+        // intentionally skip prepare_for_new_prompt: clearing history and
+        // setting current_prompt_text to "[auto-fix] ..." would produce a
+        // noisy "> [auto-fix] Pane N: command failed ..." turn header with
+        // no information. Leaving current_prompt_text=None means the
+        // response won't fold into a CompletedTurn — the error + the
+        // recommendation card render as flat, one-by-one messages.
+        self.messages
+            .push(ChatMessage::Error(notification.summary.clone()));
+        self.prompt_in_flight = true;
+        self.progress_status = Some("Preparing context...".to_string());
+        self.activity_frame = 0;
         self.scroll_to_bottom();
 
-        let prompt = PromptSubmission::new(prompt_text, Some(pane_context));
+        let prompt = PromptSubmission::new_autofix(prompt_text, Some(pane_context));
         self.current_prompt_id = Some(prompt.id);
         self.current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
         autofix_log(&format!("sending auto-fix prompt for pane {}", notification.pane_id));
@@ -1510,9 +1526,20 @@ impl App {
                         error_text
                     ),
                 );
-                self.stage_completed_turn(text);
-                self.commit_pending_completed_turn();
-                self.clear_chat_history();
+                // For normal (user-driven) prompts we wrap the failed
+                // response into a completed turn and clear the in-flight
+                // chat state. For auto-fix (no current_prompt_text) there's
+                // no turn to wrap and we want to leave the Error message
+                // visible to the user.
+                if self.current_prompt_text.is_some() {
+                    self.stage_completed_turn(text);
+                    self.commit_pending_completed_turn();
+                    self.clear_chat_history();
+                } else {
+                    self.prompt_in_flight = false;
+                    self.progress_status = None;
+                    self.agent_streaming = false;
+                }
                 FinalizeOutcome::None
             }
         }
