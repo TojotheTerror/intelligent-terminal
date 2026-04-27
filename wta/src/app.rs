@@ -2235,7 +2235,9 @@ fn rec_card_height(choice: &RecommendationChoice, panel_width: u16) -> usize {
         .sum::<usize>()
         .max(1);
 
-    // title(1) + top_border(1) + content + separator(1) + buttons(1) + bottom_border(1) + blank(1)
+    // title(at most 1) + top_pad(1) + content + divider(1) + buttons(1) + bottom_pad(1) + blank(1)
+    // No outer border — card is a filled rectangle with a single divider
+    // and one row of CARD_BG padding above/below the content groups.
     6 + content_lines
 }
 

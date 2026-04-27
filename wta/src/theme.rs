@@ -31,10 +31,13 @@ pub const DEBUG_RECEIVED: Style = Style::new().fg(Color::Cyan);
 pub const RECOMMENDATION_TITLE: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
 pub const RECOMMENDATION_DETAIL: Style = Style::new().fg(Color::Gray);
 // Card-style recommendation UI
-pub const CARD_BORDER: Style = Style::new().fg(Color::DarkGray);
-pub const CARD_BORDER_SELECTED: Style = Style::new().fg(Color::White);
-pub const CARD_CODE: Style = Style::new().fg(Color::White);
-pub const BUTTON: Style = Style::new().fg(Color::DarkGray);
+pub const CARD_BG: Color = Color::Rgb(45, 45, 45);
+pub const BUTTON_BG: Color = Color::Rgb(70, 70, 70);
+pub const CARD_FILL: Style = Style::new().bg(CARD_BG);
+pub const CARD_BORDER: Style = Style::new().fg(Color::DarkGray).bg(CARD_BG);
+pub const CARD_BORDER_SELECTED: Style = Style::new().fg(Color::White).bg(CARD_BG);
+pub const CARD_CODE: Style = Style::new().fg(Color::White).bg(CARD_BG);
+pub const BUTTON: Style = Style::new().fg(Color::Gray).bg(BUTTON_BG);
 pub const BUTTON_FOCUSED: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::White)
