@@ -67,6 +67,34 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         title_area,
     );
 
+    // Right-aligned hint: surfaces dismiss/activate keys for transient
+    // overlays (recommendation card, autofix-explain turn). Lives in the
+    // title bar so it's visible regardless of how the layout sizes the
+    // panel below.
+    let hint = if app.recommendations.is_some() {
+        Some("Enter activate · Esc dismiss ")
+    } else if app.suggested_pane_id.is_some() {
+        Some("Esc dismiss ")
+    } else {
+        None
+    };
+    if let Some(hint) = hint {
+        let hint_width = hint.chars().count() as u16;
+        if area.width > hint_width {
+            let hint_area = Rect {
+                x: area.x + area.width - hint_width,
+                y: area.y,
+                width: hint_width,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(hint, theme::DIM)))
+                    .style(theme::TITLE_BAR_STYLE),
+                hint_area,
+            );
+        }
+    }
+
     // ── Row 1: separator ───────────────────────────────────────────────────
     // `─` is vertically centered in its cell, so the line sits in the
     // middle of row 1 with half a cell of black padding above and below it.

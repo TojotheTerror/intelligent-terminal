@@ -1047,20 +1047,34 @@ fn handle_host_command(
             let has_armed_recs = state.recommendations.is_some()
                 && !state.current_prompt_is_autofix
                 && armed_pane == Some(pane_id.as_str());
-            // And clear if a Suggested indicator is shown for this pane:
-            // a successful next command means the user moved on.
-            let has_suggestion =
-                state.suggested_pane_id.as_deref() == Some(pane_id.as_str());
+            // And clear if a Suggested indicator is shown ANYWHERE: prompt
+            // activity (exit-zero OR a fresh prompt-start) in any pane means
+            // the user is moving on. Suggested is a global UI state — the
+            // pane_id parameter here just tells us *some* pane saw activity,
+            // not that the activity was in the originating pane.
+            // (Pending and Armed retain strict same-pane semantics above.)
+            let has_suggestion = state.suggested_pane_id.is_some();
             if matches || has_armed_recs || has_suggestion {
                 // Bump generation to stale any still-running agent response.
                 // Do NOT clear inflight_autofix_generation here: if the agent
                 // is still streaming, AgentMessageEnd must see Some(old_gen) !=
                 // new autofix_generation so it can discard the stale response.
                 state.autofix_generation = state.autofix_generation.wrapping_add(1);
+                // For Suggested-only clears (activity may have come from a
+                // different pane), emit cleared against the original suggested
+                // pane so the bottom bar's lastErrorPaneId stays consistent.
+                let cleared_pane = if !matches && !has_armed_recs && has_suggestion {
+                    state
+                        .suggested_pane_id
+                        .clone()
+                        .unwrap_or_else(|| pane_id.clone())
+                } else {
+                    pane_id.clone()
+                };
                 let cleared_evt = serde_json::json!({
                     "type": "event",
                     "method": "autofix_state",
-                    "params": { "state": "cleared", "pane_id": pane_id }
+                    "params": { "state": "cleared", "pane_id": cleared_pane }
                 });
                 crate::app::send_wt_protocol_event(cleared_evt.to_string());
                 state.recommendations = None;

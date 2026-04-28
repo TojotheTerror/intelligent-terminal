@@ -1060,6 +1060,11 @@ impl App {
                     WtEventSeverity::Informational => {
                         // A successful command (exit 0) in the armed/pending pane
                         // means the error was resolved. Cancel any in-flight fix and dismiss.
+                        //
+                        // Suggested has weaker semantics: any prompt activity in any
+                        // pane (osc:133;A start of a new prompt, OR osc:133;D;0
+                        // exit-zero) signals the user is moving on. Suggested is a
+                        // global UI state, not pane-local.
                         if method == "vt_sequence" {
                             let seq = params.get("sequence").and_then(|v| v.as_str()).unwrap_or("");
                             let is_exit_zero = seq.strip_prefix("osc:133;")
@@ -1067,6 +1072,7 @@ impl App {
                                 .and_then(|code| code.trim().parse::<i32>().ok())
                                 .map(|c| c == 0)
                                 .unwrap_or(false);
+                            let is_prompt_start = seq == "osc:133;A";
                             if is_exit_zero && self.autofix_pane_id.as_deref() == Some(pane_id.as_str()) {
                                 self.autofix_generation = self.autofix_generation.wrapping_add(1);
                                 // Do NOT clear inflight_autofix_generation: the stale
@@ -1078,10 +1084,13 @@ impl App {
                                 self.progress_status = None;
                                 self.emit_autofix_state_cleared(&pane);
                             }
-                            // Same idea for the Suggested state: a successful next
-                            // command means the user moved on, so dismiss the
-                            // suggestion indicator on the bottom bar.
-                            if is_exit_zero && self.suggested_pane_id.as_deref() == Some(pane_id.as_str()) {
+                            // Suggested: dismiss on prompt activity (exit-zero or
+                            // a fresh prompt-start) in ANY pane. Emit cleared
+                            // against the original suggested pane so the bar's
+                            // lastErrorPaneId stays consistent.
+                            if (is_exit_zero || is_prompt_start)
+                                && self.suggested_pane_id.is_some()
+                            {
                                 let pane = self.suggested_pane_id.take().unwrap();
                                 self.emit_autofix_state_cleared(&pane);
                             }
@@ -1272,6 +1281,20 @@ impl App {
                 if let Some(p) = pane {
                     self.emit_autofix_state_cleared(&p);
                 }
+            }
+            // Dismiss the bottom-bar Suggested indicator (autofix produced an
+            // explanation, not an executable fix). Reachable only when the user
+            // is interacting with this TUI — i.e. the agent pane is currently
+            // visible. Other dismiss paths: clicking the bar (opens pane), or
+            // any prompt activity in any pane (exit-zero or osc:133;A).
+            //
+            // NOTE: this only handles the default-tui (single-process) mode.
+            // In shared-host attach mode `suggested_pane_id` lives on the host;
+            // the attach client would need to send a HostCommand::DismissSuggestion.
+            // TODO: wire that path when shared-host mode is exercised.
+            KeyCode::Esc if self.suggested_pane_id.is_some() => {
+                let pane = self.suggested_pane_id.take().unwrap();
+                self.emit_autofix_state_cleared(&pane);
             }
             KeyCode::Esc if self.input.is_empty() => {
                 self.collapse_selected_history_turn();
@@ -2128,6 +2151,10 @@ impl App {
                     details,
                 });
                 self.commit_pending_completed_turn();
+                // Auto-expand: the diagnosis is the whole point of this turn,
+                // and the user shouldn't have to guess that the prompt header
+                // is collapsible to reveal it.
+                self.expanded_history = self.selected_history;
 
                 self.emit_autofix_state_suggested(&pane_id, &title);
 
@@ -2313,8 +2340,9 @@ const THOUGHT_PREVIEW_MAX_CHARS: usize = 1024;
 /// Content lines wrap based on the inner width of the card.
 fn rec_card_height(choice: &RecommendationChoice, panel_width: u16) -> usize {
     use crate::coordinator::RecommendedAction;
-    // inner_width = panel_width - 2 (indent) - 2 (border chars) - 2 (padding inside border)
-    let inner_width = (panel_width as usize).saturating_sub(6).max(1);
+    // Must match the wrapping width used in `recommendations::render`:
+    //   h_rec horizontal padding (1 + 1) + card outer indent (2 + 2) + inner card padding (2 + 2) = 10.
+    let inner_width = (panel_width as usize).saturating_sub(10).max(1);
 
     let text = choice.actions.iter().find_map(|action| match action {
         RecommendedAction::Send { input, .. } => Some(input.clone()),

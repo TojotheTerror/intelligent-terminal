@@ -1239,6 +1239,14 @@ async fn run_ensure_host(
                         }
                         // A successful command in an armed pane means the error was
                         // resolved without the fix. Dismiss the autofix state.
+                        //
+                        // For Suggested state specifically, ANY new prompt activity
+                        // (osc:133;A — shell prompt rendered) in any pane also
+                        // dismisses, because the user is moving on from the prior
+                        // failure. The host's ClearAutofixForPane handler is the
+                        // single arbitration point: it clears Suggested regardless
+                        // of pane_id match (suggestions are global UI state),
+                        // while keeping Armed/Pending strictly same-pane.
                         if method == "vt_sequence"
                             && note.severity == crate::app::WtEventSeverity::Informational
                         {
@@ -1248,8 +1256,13 @@ async fn run_ensure_host(
                                     .and_then(|code| code.trim().parse::<i32>().ok())
                                     .map(|c| c == 0)
                                     .unwrap_or(false);
-                                if is_exit_zero {
-                                    tracing::info!(pane_id = %pane_id, "host autofix clear on success");
+                                let is_prompt_start = seq == "osc:133;A";
+                                if is_exit_zero || is_prompt_start {
+                                    tracing::info!(
+                                        pane_id = %pane_id,
+                                        seq = %seq,
+                                        "host autofix clear on success/prompt-start"
+                                    );
                                     let _ = host_autofix_tx.send(
                                         shared_host::HostAutofixCommand::ClearOnSuccess {
                                             pane_id: pane_id.clone(),

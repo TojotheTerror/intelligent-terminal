@@ -2966,19 +2966,20 @@ namespace winrt::TerminalApp::implementation
                 diagBtn.Opacity(1.0);
                 diagBtn.IsEnabled(true);
 
-                // Blue info color — distinct from Armed's yellow ("there's
-                // something to read", not "there's something to apply").
-                const auto info = SolidColorBrush{
-                    ColorHelper::FromArgb(255, 0x4F, 0xC3, 0xF7)
+                // Same yellow as Armed — both are "something needs attention"
+                // states. The label text is what distinguishes them
+                // ("open agent pane" vs "Ctrl+Alt+. to fix").
+                const auto accent = SolidColorBrush{
+                    ColorHelper::FromArgb(255, 0xFF, 0xD7, 0x00)
                 };
                 if (icon)
                 {
-                    icon.Foreground(info);
+                    icon.Foreground(accent);
                 }
                 if (label)
                 {
                     label.Text(L"Suggestion ready — open agent pane");
-                    label.Foreground(info);
+                    label.Foreground(accent);
                     label.Visibility(Visibility::Visible);
                 }
 
