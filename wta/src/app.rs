@@ -590,7 +590,13 @@ impl App {
             window_id: None,
             source_session_id: None,
             source_cwd: None,
-            agent_sessions: crate::agent_sessions::AgentSessionRegistry::new(),
+            agent_sessions: {
+                let mut reg = crate::agent_sessions::AgentSessionRegistry::new();
+                if std::env::var("WTA_DEMO_AGENTS").ok().as_deref() == Some("1") {
+                    reg.populate_demo_data();
+                }
+                reg
+            },
             current_view: View::Chat,
             agents_list_state: {
                 let mut s = ratatui::widgets::ListState::default();
