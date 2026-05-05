@@ -67,6 +67,39 @@ pub enum SessionEvent {
     SessionStopped   { key: AgentKey, reason: String },
     ConnectionFailed { pane_session_id: String, reason: String },
     PaneClosed       { pane_session_id: String },
+    /// Optimistic transition: a resume command for this key was just dispatched.
+    /// Bumps a Historical/Ended row to Idle so a rapid second Enter on the same
+    /// row doesn't dispatch another `wtcli split-pane` and create a duplicate
+    /// pane while we wait for the new pane's SessionStarted hook to arrive.
+    /// pane_session_id stays None until the hook lands; activate_session's
+    /// focus-pane branch is a no-op while pane_session_id is None.
+    ResumeDispatched { key: AgentKey },
+}
+
+/// Returns `true` for tool names that represent the agent soliciting input
+/// from the user (a clarifying question or a forced-choice prompt) rather
+/// than running an autonomous task. Such tools never auto-complete — they
+/// block until the user answers — so the row should show ATTENTION, not
+/// WORKING. Match list is case-insensitive.
+///
+/// Known matches (verified against actual hook payloads):
+///   - Copilot CLI: `ask_user` (carries `tool_input.question` + `choices`)
+/// Speculative aliases for other CLIs are included so the heuristic catches
+/// the common variants without needing per-CLI plumbing.
+pub fn is_user_input_tool(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(),
+        "ask_user"
+        | "askuser"
+        | "ask-user"
+        | "ask_question"
+        | "askquestion"
+        | "ask_for_clarification"
+        | "request_input"
+        | "request_user_input"
+        | "user_input"
+        | "prompt_user"
+        | "clarification_request"
+    )
 }
 
 #[derive(Default)]
@@ -105,7 +138,22 @@ impl AgentSessionRegistry {
                 if let Some(old_pane) = entry.pane_session_id.take() {
                     if old_pane != pane_session_id {
                         self.active_by_pane.remove(&old_pane);
+                        tracing::info!(
+                            target: "agent_session_registry",
+                            key = %key,
+                            old_pane = %old_pane,
+                            new_pane = %pane_session_id,
+                            "SessionStarted rebinding pane_session_id",
+                        );
                     }
+                } else {
+                    tracing::info!(
+                        target: "agent_session_registry",
+                        key = %key,
+                        new_pane = %pane_session_id,
+                        cli = ?cli_source,
+                        "SessionStarted assigning pane_session_id (first bind)",
+                    );
                 }
                 entry.cli_source       = cli_source;
                 // Preserve an existing title (e.g. one loaded from disk by the
@@ -137,8 +185,22 @@ impl AgentSessionRegistry {
 
             SessionEvent::ToolCompleted { key } => {
                 if let Some(entry) = self.sessions.get_mut(&key) {
-                    if entry.status == AgentStatus::Working {
-                        entry.status        = AgentStatus::Idle;
+                    // Demote to Idle when this completion resolves an active
+                    // wait. Two cases produce Attention:
+                    //   1. A user-input tool started (e.g. Copilot's `ask_user`)
+                    //      — its matching ToolCompleted means the user replied.
+                    //   2. A `Notification` event from a permission_prompt hook
+                    //      escalated us mid-tool — the matching tool.completed
+                    //      / tool.failed (approve / reject) resolves it.
+                    // Both cases mean "next event clears Attention", so we
+                    // demote on any ToolCompleted while in Attention. The Error
+                    // state is separate (set by ConnectionFailed) and is NOT
+                    // touched here, so transient-error UX still works.
+                    let demotable = entry.status == AgentStatus::Working
+                        || entry.status == AgentStatus::Attention;
+                    if demotable {
+                        entry.status            = AgentStatus::Idle;
+                        entry.attention_reason  = None;
                     }
                     entry.current_tool      = None;
                     entry.last_activity_at  = now;
@@ -186,6 +248,21 @@ impl AgentSessionRegistry {
                     if let Some(entry) = self.sessions.get_mut(&key) {
                         entry.status            = AgentStatus::Error;
                         entry.last_error        = Some(reason);
+                        entry.last_activity_at  = now;
+                        self.dirty = true;
+                    }
+                }
+            }
+
+            SessionEvent::ResumeDispatched { key } => {
+                if let Some(entry) = self.sessions.get_mut(&key) {
+                    // Only flip when the row genuinely had no live pane to
+                    // begin with. If a SessionStarted event won the race and
+                    // already populated pane_session_id with the new pane's
+                    // Guid, leave the row alone — the hook layer is the
+                    // source of truth for live state.
+                    if matches!(entry.status, AgentStatus::Historical | AgentStatus::Ended) {
+                        entry.status            = AgentStatus::Idle;
                         entry.last_activity_at  = now;
                         self.dirty = true;
                     }
@@ -259,6 +336,42 @@ impl AgentSessionRegistry {
             self.sessions.insert(s.key.clone(), s);
         }
         self.dirty = true;
+    }
+
+    /// Replace `title` for `key` only if the current title looks synthetic
+    /// (empty, or equal to the cwd's leaf folder name). Used when fresh
+    /// disk data — e.g. an updated `workspace.yaml summary:` field that
+    /// the CLI wrote *after* this session was first registered live —
+    /// becomes available later. A non-synthetic title (e.g. one already
+    /// loaded from disk by `merge_historical`) is left untouched, so
+    /// repeated refreshes are idempotent and never clobber a real summary.
+    /// Returns `true` iff the title was actually changed.
+    pub fn upgrade_title_if_synthetic(&mut self, key: &str, candidate: &str) -> bool {
+        if candidate.is_empty() { return false; }
+        let Some(entry) = self.sessions.get_mut(key) else { return false; };
+        let cwd_leaf = entry.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_synthetic = entry.title.is_empty() || entry.title == cwd_leaf;
+        if !is_synthetic { return false; }
+        if entry.title == candidate { return false; }
+        entry.title = candidate.to_string();
+        self.dirty = true;
+        true
+    }
+
+    /// Read-only access to the cli_source for a key. Used by callers that
+    /// need to dispatch on CLI without taking ownership of the entry.
+    pub fn cli_source_for(&self, key: &str) -> Option<CliSource> {
+        self.sessions.get(key).map(|s| s.cli_source.clone())
+    }
+
+    /// Returns true iff the session's current title is "synthetic" — empty
+    /// or equal to the cwd's leaf folder. Used to short-circuit expensive
+    /// disk lookups when the title is already a real one (e.g. loaded from
+    /// `workspace.yaml summary:` at startup).
+    pub fn title_is_synthetic(&self, key: &str) -> bool {
+        let Some(entry) = self.sessions.get(key) else { return false; };
+        let cwd_leaf = entry.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        entry.title.is_empty() || entry.title == cwd_leaf
     }
 
     /// Populate the registry with synthetic data covering all 6 statuses.
@@ -429,17 +542,41 @@ mod tests {
     }
 
     #[test]
-    fn tool_completed_does_not_demote_attention_or_error() {
+    fn tool_completed_demotes_attention_to_idle_but_not_error() {
+        // Attention is a transient "awaiting user" state set by either a
+        // user-input tool (e.g. ask_user) or a permission_prompt notification
+        // arriving mid-tool. The matching ToolCompleted/ToolFailed/Stop event
+        // means the user has answered (approve, reject, or supplied input),
+        // so Attention must clear back to Idle. Error, by contrast, is a real
+        // failure state set by ConnectionFailed and must persist until a new
+        // SessionStarted/ToolStarting event resets it.
         let mut reg = AgentSessionRegistry::new();
         reg.apply(SessionEvent::SessionStarted {
             key: k("s"), cli_source: CliSource::Claude,
             pane_session_id: pane("p"), cwd: PathBuf::from("/x"),
             title: "t".into(),
         });
-        // simulate Notification arriving before tool completes:
-        reg.sessions.get_mut("s").unwrap().status = AgentStatus::Attention;
-        reg.apply(SessionEvent::ToolCompleted { key: k("s") });
+
+        // Case 1: Attention from a permission_prompt-style notification.
+        reg.apply(SessionEvent::ToolStarting {
+            key: k("s"), tool_name: "shell".into(),
+        });
+        reg.apply(SessionEvent::Notification {
+            key: k("s"), message: "approve: rm -rf foo".into(),
+        });
         assert_eq!(reg.sessions.get("s").unwrap().status, AgentStatus::Attention);
+        // User rejects → tool.failed → ToolCompleted. Should clear Attention.
+        reg.apply(SessionEvent::ToolCompleted { key: k("s") });
+        let s = reg.sessions.get("s").unwrap();
+        assert_eq!(s.status, AgentStatus::Idle);
+        assert!(s.attention_reason.is_none(), "attention_reason should be cleared");
+        assert!(s.current_tool.is_none());
+
+        // Case 2: Error must NOT be demoted by ToolCompleted.
+        reg.sessions.get_mut("s").unwrap().status = AgentStatus::Error;
+        reg.sessions.get_mut("s").unwrap().last_error = Some("API failed".into());
+        reg.apply(SessionEvent::ToolCompleted { key: k("s") });
+        assert_eq!(reg.sessions.get("s").unwrap().status, AgentStatus::Error);
     }
 
     #[test]
@@ -495,6 +632,56 @@ mod tests {
         reg.apply(SessionEvent::PaneClosed { pane_session_id: pane("ghost") });
         assert!(reg.sessions.is_empty());
         assert!(reg.active_by_pane.is_empty());
+    }
+
+    #[test]
+    fn resume_dispatched_promotes_ended_to_idle() {
+        // After Enter on a Historical/Ended row, dispatch_resume applies
+        // ResumeDispatched so a rapid second Enter does not spawn another
+        // pane while the first resume is in flight (Gemini's hooks can
+        // take a long time to fire).
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::SessionStarted {
+            key: k("s"), cli_source: CliSource::Gemini,
+            pane_session_id: pane("p"), cwd: PathBuf::from("/x"),
+            title: "t".into(),
+        });
+        reg.apply(SessionEvent::PaneClosed { pane_session_id: pane("p") });
+        assert_eq!(reg.sessions.get("s").unwrap().status, AgentStatus::Ended);
+
+        reg.apply(SessionEvent::ResumeDispatched { key: k("s") });
+        let s = reg.sessions.get("s").unwrap();
+        assert_eq!(s.status, AgentStatus::Idle);
+        assert!(s.pane_session_id.is_none(),
+            "pane_session_id should still be None — only the new SessionStarted hook should set it");
+    }
+
+    #[test]
+    fn resume_dispatched_does_not_clobber_live_row() {
+        // If a live row (Working/Idle) somehow receives ResumeDispatched
+        // (e.g. SessionStarted hook arrived before our optimistic apply),
+        // we must NOT downgrade it.
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::SessionStarted {
+            key: k("s"), cli_source: CliSource::Gemini,
+            pane_session_id: pane("p"), cwd: PathBuf::from("/x"),
+            title: "t".into(),
+        });
+        reg.apply(SessionEvent::ToolStarting {
+            key: k("s"), tool_name: "shell".into(),
+        });
+        assert_eq!(reg.sessions.get("s").unwrap().status, AgentStatus::Working);
+
+        reg.apply(SessionEvent::ResumeDispatched { key: k("s") });
+        // Working row stays Working — hook is the source of truth for live state.
+        assert_eq!(reg.sessions.get("s").unwrap().status, AgentStatus::Working);
+    }
+
+    #[test]
+    fn resume_dispatched_for_unknown_key_is_noop() {
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::ResumeDispatched { key: k("ghost") });
+        assert!(reg.sessions.is_empty());
     }
 
     #[test]
@@ -642,5 +829,120 @@ mod tests {
         // hist-1 must be added as Historical.
         let hist = reg.sessions.get("hist-1").unwrap();
         assert_eq!(hist.status, AgentStatus::Historical);
+    }
+
+    #[test]
+    fn upgrade_title_replaces_synthetic_cwd_basename() {
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::SessionStarted {
+            key:             "s1".into(),
+            cli_source:      CliSource::Copilot,
+            pane_session_id: "p1".into(),
+            cwd:             PathBuf::from("C:\\Users\\yuazha"),
+            // Synthetic title: cwd's leaf folder name.
+            title:           "yuazha".into(),
+        });
+        let _ = reg.take_dirty();
+
+        assert!(reg.upgrade_title_if_synthetic("s1", "Check Current Weather"));
+        assert_eq!(reg.sessions.get("s1").unwrap().title, "Check Current Weather");
+        assert!(reg.take_dirty(), "upgrade should mark registry dirty");
+    }
+
+    #[test]
+    fn upgrade_title_replaces_empty_title() {
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::SessionStarted {
+            key:             "s1".into(),
+            cli_source:      CliSource::Copilot,
+            pane_session_id: "p1".into(),
+            cwd:             PathBuf::from("C:\\Users\\yuazha"),
+            title:           String::new(),
+        });
+        assert!(reg.upgrade_title_if_synthetic("s1", "Real Summary"));
+        assert_eq!(reg.sessions.get("s1").unwrap().title, "Real Summary");
+    }
+
+    #[test]
+    fn upgrade_title_keeps_real_title_intact() {
+        let mut reg = AgentSessionRegistry::new();
+        // Pre-load a session with a real (non-synthetic) title from disk.
+        reg.merge_historical(vec![AgentSession {
+            key:               "s1".into(),
+            cli_source:        CliSource::Copilot,
+            pane_session_id:   None, window_id: None, tab_id: None,
+            title:             "Workspace Summary From Disk".into(),
+            cwd:               PathBuf::from("C:\\Users\\yuazha"),
+            started_at:        SystemTime::now(),
+            last_activity_at:  SystemTime::now(),
+            status:            AgentStatus::Historical,
+            last_error: None, current_tool: None, attention_reason: None,
+            log_path: None,
+        }]);
+        let _ = reg.take_dirty();
+
+        assert!(!reg.upgrade_title_if_synthetic("s1", "yuazha"));
+        assert_eq!(reg.sessions.get("s1").unwrap().title, "Workspace Summary From Disk");
+        assert!(!reg.take_dirty(), "no-op upgrade must not mark dirty");
+    }
+
+    #[test]
+    fn upgrade_title_ignores_empty_candidate_and_unknown_key() {
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::SessionStarted {
+            key: "s1".into(), cli_source: CliSource::Copilot,
+            pane_session_id: "p".into(), cwd: PathBuf::from("/x"),
+            title: "x".into(),
+        });
+        assert!(!reg.upgrade_title_if_synthetic("s1", ""));
+        assert!(!reg.upgrade_title_if_synthetic("missing", "title"));
+    }
+
+    #[test]
+    fn is_user_input_tool_recognises_known_aliases() {
+        // Verified Copilot CLI alias.
+        assert!(is_user_input_tool("ask_user"));
+        // Speculative aliases (case-insensitive, hyphen/underscore variants).
+        assert!(is_user_input_tool("Ask_User"));
+        assert!(is_user_input_tool("ask-user"));
+        assert!(is_user_input_tool("AskQuestion"));
+        assert!(is_user_input_tool("request_input"));
+        assert!(is_user_input_tool("user_input"));
+        // Regular tools must not match.
+        assert!(!is_user_input_tool("shell.run"));
+        assert!(!is_user_input_tool("read_file"));
+        assert!(!is_user_input_tool("bash"));
+        assert!(!is_user_input_tool(""));
+    }
+
+    #[test]
+    fn tool_completed_demotes_attention_when_current_tool_was_user_input() {
+        // Models the Copilot ask_user flow: BeforeTool fires with
+        // tool_name="ask_user" → registry sees it as Attention. When the
+        // user answers, AfterTool fires → ToolCompleted should demote
+        // Attention back to Idle (so the row stops nagging).
+        let mut reg = AgentSessionRegistry::new();
+        reg.apply(SessionEvent::SessionStarted {
+            key: k("s"), cli_source: CliSource::Copilot,
+            pane_session_id: pane("p"), cwd: PathBuf::from("/x"),
+            title: "t".into(),
+        });
+        // Route would do these two: ToolStarting (records current_tool)
+        // then Notification (escalates status to Attention).
+        reg.apply(SessionEvent::ToolStarting {
+            key: k("s"), tool_name: "ask_user".into(),
+        });
+        reg.apply(SessionEvent::Notification {
+            key: k("s"), message: "Which folder?".into(),
+        });
+        assert_eq!(reg.sessions.get("s").unwrap().status, AgentStatus::Attention);
+        assert_eq!(reg.sessions.get("s").unwrap().current_tool.as_deref(), Some("ask_user"));
+
+        // User answers → AfterTool → ToolCompleted.
+        reg.apply(SessionEvent::ToolCompleted { key: k("s") });
+        let s = reg.sessions.get("s").unwrap();
+        assert_eq!(s.status, AgentStatus::Idle);
+        assert!(s.current_tool.is_none());
+        assert!(s.attention_reason.is_none());
     }
 }

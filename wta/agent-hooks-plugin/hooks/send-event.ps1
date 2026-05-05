@@ -23,17 +23,23 @@ if (-not $wtcliPath) {
 }
 if (-not $wtcliPath) { exit 0 }
 
-# Read hook JSON from stdin
+# Read hook JSON from stdin (may be empty for events that don't carry a
+# payload, e.g. some CLIs' AfterTool / SessionEnd. We still want those to
+# reach WTA so the state can transition out of Working/Working back to Idle.)
 $hookData = [Console]::In.ReadToEnd()
-if (-not $hookData -or -not $hookData.Trim()) { exit 0 }
+if (-not $hookData) { $hookData = "" }
 
 # Wrap payload and send via ProcessStartInfo to avoid PowerShell argument mangling
 try {
-    $parsed = $hookData | ConvertFrom-Json
+    # ConvertFrom-Json on empty/whitespace input throws; treat as no payload.
+    $parsed = $null
+    if ($hookData.Trim()) {
+        try { $parsed = $hookData | ConvertFrom-Json } catch { $parsed = $null }
+    }
 
     # Extract agent_session_id from stdin JSON (Claude/Gemini), env (Copilot), or empty.
     $agentSessionId = ""
-    if ($parsed.PSObject.Properties.Name -contains "session_id") {
+    if ($parsed -and ($parsed.PSObject.Properties.Name -contains "session_id")) {
         $agentSessionId = [string]$parsed.session_id
     } elseif ($env:COPILOT_SESSION_ID) {
         $agentSessionId = $env:COPILOT_SESSION_ID
@@ -67,8 +73,29 @@ try {
 
     $payload = $wrapper | ConvertTo-Json -Compress -Depth 5
 
-    # Escape quotes for raw command line: each " becomes \"
-    $escaped = $payload.Replace('"', '\"')
+    # CommandLineToArgvW-correct escape for a quoted argument:
+    #   * Every backslash run that precedes a `"` (or end of string) is doubled.
+    #   * Every `"` is preceded by a single extra backslash.
+    # This is required so messages containing Windows paths (e.g. permission
+    # prompts: 'Get-Acl -Path "C:\Windows\..."') don't have their JSON truncated
+    # by the child process's argv parser.
+    $sb = New-Object System.Text.StringBuilder
+    $bsRun = 0
+    foreach ($ch in $payload.ToCharArray()) {
+        if ($ch -eq '\') {
+            $bsRun++
+        } elseif ($ch -eq '"') {
+            [void]$sb.Append([string]'\' * ($bsRun * 2 + 1))
+            [void]$sb.Append('"')
+            $bsRun = 0
+        } else {
+            if ($bsRun -gt 0) { [void]$sb.Append([string]'\' * $bsRun); $bsRun = 0 }
+            [void]$sb.Append($ch)
+        }
+    }
+    if ($bsRun -gt 0) { [void]$sb.Append([string]'\' * ($bsRun * 2)) }
+    $escaped = $sb.ToString()
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $wtcliPath
     $psi.Arguments = "send-event -e $EventType `"$escaped`""

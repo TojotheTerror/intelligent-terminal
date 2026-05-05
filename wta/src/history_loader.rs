@@ -46,6 +46,66 @@ pub fn load_all() -> Vec<AgentSession> {
     out
 }
 
+/// Best-effort title lookup for a single live session. Reads the same
+/// per-CLI on-disk artefacts that `load_all` scans, but only for the
+/// specific `key`. Used to upgrade synthetic titles (cwd basename) into
+/// real ones (workspace.yaml summary / first user prompt) once the CLI
+/// has had a chance to write that data — typically a few seconds after
+/// the first hook event arrives. Returns `None` if no usable title is
+/// on disk (caller keeps whatever synthetic title it had).
+pub fn lookup_title_for_session(cli: CliSource, key: &str) -> Option<String> {
+    let home = home_dir()?;
+    match cli {
+        CliSource::Copilot => copilot_title_for_key(&home, key),
+        CliSource::Claude  => claude_title_for_key(&home, key),
+        CliSource::Gemini  => gemini_title_for_key(&home, key),
+        _ => None,
+    }
+}
+
+fn copilot_title_for_key(home: &Path, key: &str) -> Option<String> {
+    let workspace = home.join(".copilot").join("session-state").join(key).join("workspace.yaml");
+    let yaml = fs::read_to_string(&workspace).ok()?;
+    parse_simple_yaml(&yaml, "summary").filter(|s| !s.is_empty())
+        .or_else(|| parse_simple_yaml(&yaml, "name").filter(|s| !s.is_empty()))
+}
+
+fn claude_title_for_key(home: &Path, key: &str) -> Option<String> {
+    let projects = home.join(".claude").join("projects");
+    let rd = fs::read_dir(&projects).ok()?;
+    for proj in rd.flatten() {
+        if !proj.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+        let candidate = proj.path().join(format!("{}.jsonl", key));
+        if candidate.is_file() {
+            return first_user_text_jsonl(&candidate, ClaudeOrGemini::Claude);
+        }
+    }
+    None
+}
+
+fn gemini_title_for_key(home: &Path, key: &str) -> Option<String> {
+    let tmp = home.join(".gemini").join("tmp");
+    let rd = fs::read_dir(&tmp).ok()?;
+    for proj in rd.flatten() {
+        if !proj.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+        let chats = proj.path().join("chats");
+        let Ok(files) = fs::read_dir(&chats) else { continue; };
+        for f in files.flatten() {
+            let p = f.path();
+            let name = match p.file_name().and_then(|n| n.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if !name.starts_with("session-") || !name.ends_with(".jsonl") { continue; }
+            let (sid, _) = parse_gemini_meta(&p);
+            if sid.as_deref() == Some(key) {
+                return first_user_text_jsonl(&p, ClaudeOrGemini::Gemini);
+            }
+        }
+    }
+    None
+}
+
 fn take_n(mut v: Vec<AgentSession>, n: usize) -> Vec<AgentSession> {
     v.truncate(n);
     v
@@ -74,6 +134,21 @@ fn load_copilot(home: &Path) -> Vec<AgentSession> {
 
         let workspace = dir.join("workspace.yaml");
         let events    = dir.join("events.jsonl");
+
+        // Skip ephemeral / never-used Copilot CLI sessions. Whenever WT (or
+        // wta itself) spawns a Copilot CLI process — e.g. as the back-end
+        // for an agent pane, a `?prompt` delegate, or a coordinator — that
+        // process eagerly creates `~/.copilot/session-state/<UUID>/workspace.yaml`
+        // even before the user types anything. If the user never interacts,
+        // no `events.jsonl` is ever written. These dirs would otherwise
+        // appear at the very top of F2 after each WT restart (most-recent
+        // last_activity), masking real historical sessions. Treat the
+        // existence of a non-empty `events.jsonl` as the marker for "user
+        // actually did something here".
+        let has_real_activity = events.metadata()
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false);
+        if !has_real_activity { continue; }
 
         let last_activity = events.metadata()
             .and_then(|m| m.modified()).ok()
@@ -505,10 +580,56 @@ mod tests {
              cwd: D:\\x\n\
              user_named: false\n\
              summary_count: 0\n");
+        // events.jsonl must exist (and be non-empty) for the loader to
+        // accept the entry — see `copilot_loader_skips_ephemeral_session_with_no_events`.
+        write_file(&dir.join("events.jsonl"), "{\"type\":\"session.start\"}\n");
 
         let v = load_copilot(&home);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].title, "copilot abcdef01");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn copilot_loader_skips_ephemeral_session_with_no_events() {
+        // Reproduces the "ghost session at top of F2" bug: every time WT
+        // (or wta itself) spawns a Copilot CLI process — e.g. as the
+        // back-end for an agent pane or for a `?prompt` delegate — that
+        // process eagerly creates `~/.copilot/session-state/<UUID>/workspace.yaml`
+        // (171 bytes of stub metadata) before the user types anything.
+        // If the user never interacts, no `events.jsonl` is ever written.
+        // These dirs would otherwise dominate the top of F2 (most-recent
+        // last_activity) on the next WT restart. Loader must skip them.
+        let home = tmp_root("copilot-ghost");
+        let base = home.join(".copilot").join("session-state");
+
+        // Real session — has events.jsonl with content.
+        let real = "11111111-1111-1111-1111-111111111111";
+        let dir_real = base.join(real);
+        fs::create_dir_all(&dir_real).unwrap();
+        write_file(&dir_real.join("workspace.yaml"),
+            "id: 11111111-1111-1111-1111-111111111111\ncwd: C:\\proj\nsummary: Real Work\n");
+        write_file(&dir_real.join("events.jsonl"),
+            "{\"type\":\"session.start\"}\n");
+
+        // Ghost session — workspace.yaml only, no events.jsonl.
+        let ghost = "22222222-2222-2222-2222-222222222222";
+        let dir_ghost = base.join(ghost);
+        fs::create_dir_all(&dir_ghost).unwrap();
+        write_file(&dir_ghost.join("workspace.yaml"),
+            "id: 22222222-2222-2222-2222-222222222222\ncwd: C:\\Users\\me\n");
+
+        // Ghost session — empty events.jsonl (touched but never written).
+        let ghost_empty = "33333333-3333-3333-3333-333333333333";
+        let dir_ghost_empty = base.join(ghost_empty);
+        fs::create_dir_all(&dir_ghost_empty).unwrap();
+        write_file(&dir_ghost_empty.join("workspace.yaml"),
+            "id: 33333333-3333-3333-3333-333333333333\ncwd: C:\\Users\\me\n");
+        write_file(&dir_ghost_empty.join("events.jsonl"), "");
+
+        let v = load_copilot(&home);
+        assert_eq!(v.len(), 1, "only the real session should be loaded");
+        assert_eq!(v[0].key, real);
         let _ = fs::remove_dir_all(&home);
     }
 

@@ -170,6 +170,7 @@ pub fn route_agent_event_to_registry(
     let cli_source = CliSource::parse(params.get("cli_source").and_then(|v| v.as_str()));
     let asid       = params.get("agent_session_id").and_then(|v| v.as_str()).unwrap_or("");
     let key        = reg.resolve_or_synthesize_key(asid, pane_session_id);
+    let key_for_refresh = key.clone();
     tracing::info!(
         target: "agent_route",
         event = %event,
@@ -225,10 +226,29 @@ pub fn route_agent_event_to_registry(
             cwd,
             title: synth_title,
         },
-        "agent.tool.starting" => SessionEvent::ToolStarting {
-            key,
-            tool_name: payload.get("tool_name").or_else(|| payload.get("toolName"))
-                .and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        "agent.tool.starting" => {
+            let tool_name = payload.get("tool_name").or_else(|| payload.get("toolName"))
+                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+            // User-input tools (e.g. Copilot's `ask_user`) never auto-complete.
+            // They block until the user answers, so the row should show
+            // ATTENTION, not WORKING. We still apply ToolStarting first so
+            // current_tool is recorded — that lets the matching tool.completed
+            // (when the user answers) demote Attention back to Idle in the
+            // registry. Then we synthesise a Notification carrying the
+            // question text as the attention reason.
+            if crate::agent_sessions::is_user_input_tool(&tool_name) {
+                reg.apply(SessionEvent::ToolStarting { key: key.clone(), tool_name });
+                let message = payload.get("tool_input")
+                    .and_then(|ti| ti.get("question")
+                        .or_else(|| ti.get("prompt"))
+                        .or_else(|| ti.get("message")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("waiting for user input")
+                    .to_string();
+                SessionEvent::Notification { key, message }
+            } else {
+                SessionEvent::ToolStarting { key, tool_name }
+            }
         },
         // A user prompt kicks off a "thinking" cycle even when no tool fires.
         // Treat it as a synthetic ToolStarting so the row goes Idle -> Working;
@@ -263,6 +283,21 @@ pub fn route_agent_event_to_registry(
     };
 
     reg.apply(ev);
+
+    // After applying the event, attempt to upgrade a synthetic title
+    // (cwd basename / empty) with whatever the CLI has now written to
+    // disk for this session — most commonly the `workspace.yaml summary:`
+    // field that Copilot writes a few seconds into a session, after our
+    // initial synthetic SessionStarted has already run. We short-circuit
+    // when the title is already real to avoid a disk read per hook event.
+    if reg.title_is_synthetic(&key_for_refresh) {
+        if let Some(cli) = reg.cli_source_for(&key_for_refresh) {
+            if let Some(disk_title) = crate::history_loader::lookup_title_for_session(cli, &key_for_refresh) {
+                reg.upgrade_title_if_synthetic(&key_for_refresh, &disk_title);
+            }
+        }
+    }
+
     let dirty = reg.take_dirty();
     tracing::info!(
         target: "agent_route",
@@ -2996,10 +3031,26 @@ impl App {
 
     fn activate_session(&mut self, s: &crate::agent_sessions::AgentSession) {
         use crate::agent_sessions::AgentStatus::*;
+        tracing::info!(
+            target: "agents_view",
+            key = %s.key,
+            status = ?s.status,
+            pane_session_id = ?s.pane_session_id,
+            cli = ?s.cli_source,
+            "activate_session: Enter pressed on row",
+        );
         match s.status {
             Idle | Working | Attention | Error => {
                 if let Some(pane) = &s.pane_session_id {
                     self.dispatch_focus_pane(pane.clone());
+                } else {
+                    tracing::warn!(
+                        target: "agents_view",
+                        key = %s.key,
+                        status = ?s.status,
+                        "activate_session: live row has no pane_session_id; \
+                         silently no-op (waiting for SessionStarted hook)",
+                    );
                 }
             }
             Ended | Historical => {
@@ -3014,7 +3065,7 @@ impl App {
             "-t".to_string(),
             pane_session_id.clone(),
         ];
-        crate::shell::wt_channel::spawn_wtcli_async(&argv);
+        crate::shell::wt_channel::spawn_wtcli_focus_pane(&pane_session_id);
         #[cfg(test)]
         {
             self.last_dispatched_command = Some(DispatchedCommand {
@@ -3060,17 +3111,49 @@ impl App {
         // Use the resolved executable name (e.g. "gemini.cmd") so CreateProcess
         // finds shim'd npm installs without an .exe extension.
         let resolved = crate::agent_registry::resolve_bare_agent_name(cli_id);
-        let commandline = format!("{} {} {}", resolved, profile.resume_flag, s.key);
 
-        // TODO(v2): wtcli's split-pane does not currently accept --starting-directory.
-        // The resumed pane inherits the splitting pane's cwd; the CLI's own --resume
-        // typically restores the session's original working directory anyway.
+        // Each CLI's resume looks up sessions in a cwd-keyed location:
+        //   - Claude:  ~/.claude/projects/<cwd-hash>/
+        //   - Gemini:  ~/.gemini/tmp/<cwd-leaf>/chats/
+        //   - Copilot: ~/.copilot/session-state/<id>/   (cwd-independent)
+        // Without setting cwd we'd inherit the splitting pane's cwd, which
+        // makes Claude/Gemini print "Invalid session identifier" because they
+        // hash a different cwd. Wrap the command in `cmd /d /s /c "cd /d ... && cli ..."`
+        // so the new pane starts in the recorded session cwd. /s with the outer
+        // quote pair tells cmd to use the literal content between the outer
+        // quotes verbatim — no inner-quote stripping — which is critical so
+        // the embedded `"cwd"` quotes survive cmd's parser.
+        let inner = format!("{} {} {}", resolved, profile.resume_flag, s.key);
+        let commandline = match s.cwd.to_str() {
+            Some(cwd) if !cwd.is_empty() => {
+                format!("cmd.exe /d /s /c \"cd /d \"{}\" && {}\"", cwd, inner)
+            }
+            _ => inner,
+        };
+
         let argv = vec![
             "split-pane".to_string(),
             "-c".to_string(),
             commandline,
         ];
-        crate::shell::wt_channel::spawn_wtcli_async(&argv);
+        // Use split-then-focus instead of plain split-pane: wtcli's split-pane
+        // hardcodes background=true at the COM layer (src/tools/wtcli/main.cpp:446),
+        // so the new pane lands behind the originating one. Resuming a
+        // historical session from F2 should put the user *in* the new pane.
+        crate::shell::wt_channel::spawn_wtcli_split_then_focus(&argv);
+
+        // Optimistically transition the row out of Historical/Ended so a
+        // rapid second Enter on the same row does NOT spawn another pane
+        // while the first resume is still in flight (Gemini's hooks can
+        // take 1+ minutes to fire after CLI start). The row will display
+        // IDLE; activate_session's focus-pane branch is a no-op while
+        // pane_session_id is None, so subsequent Enters silently wait
+        // for the new SessionStarted hook to refresh the pane GUID.
+        self.agent_sessions.apply(
+            crate::agent_sessions::SessionEvent::ResumeDispatched {
+                key: s.key.clone(),
+            },
+        );
         #[cfg(test)]
         {
             self.last_dispatched_command = Some(DispatchedCommand {
@@ -3350,7 +3433,28 @@ mod tests {
         assert_eq!(cmd.kind, DispatchedCommandKind::SplitPaneResume);
         let argv = cmd.argv.join(" ");
         assert!(argv.contains("split-pane"), "argv: {}", argv);
-        assert!(argv.contains("claude --resume abc-123"), "argv: {}", argv);
+        // Tolerate `claude` or `claude.cmd` — resolve_bare_agent_name looks
+        // up PATH and returns the first match, which may carry the .cmd
+        // shim extension on dev machines that have npm-installed Claude.
+        assert!(
+            argv.contains("claude --resume abc-123")
+                || argv.contains("claude.cmd --resume abc-123"),
+            "argv: {}", argv,
+        );
+        // The resumed pane must start in the original session cwd; otherwise
+        // Claude/Gemini fail to locate the on-disk session under their
+        // cwd-keyed storage layout. The wrapper must use `/d /s /c` so the
+        // embedded quotes around cwd survive cmd's command-line parser.
+        assert!(
+            argv.contains("cmd.exe /d /s /c"),
+            "expected cmd wrapper for cwd, argv: {}",
+            argv,
+        );
+        assert!(
+            argv.contains("cd /d \"/work/proj\""),
+            "expected cwd to be passed to cd, argv: {}",
+            argv,
+        );
     }
 
     #[test]
@@ -4063,5 +4167,76 @@ mod tests {
         route_agent_event_to_registry(&mut reg, "00000000-0000-0000-0000-0000000000cc", &p);
         let s = reg.iter_sorted().into_iter().find(|s| s.key == "fresh-asid").unwrap();
         assert_eq!(s.title, "proj");
+    }
+
+    #[test]
+    fn route_ask_user_tool_starting_routes_to_attention_with_question() {
+        // Real Copilot CLI payload (verified against wta-main.log):
+        // BeforeTool fires with tool_name="ask_user" and tool_input.question
+        // when the agent needs the user to clarify or pick from choices. The
+        // tool never auto-completes — without special handling the row stays
+        // stuck at Working until the user answers (which can be many minutes).
+        // We expect the row to instead show Attention, with the question text
+        // surfaced as the attention reason.
+        use crate::agent_sessions::{AgentSessionRegistry, AgentStatus};
+        let mut reg = AgentSessionRegistry::new();
+        let pane = "00000000-0000-0000-0000-0000000000dd";
+        let p = serde_json::json!({
+            "event": "agent.tool.starting",
+            "cli_source": "copilot",
+            "agent_session_id": "ask-asid",
+            "payload": {
+                "cwd": "C:\\Users\\yuazha\\proj",
+                "tool_name": "ask_user",
+                "tool_input": {
+                    "question": "Which folder do you want me to explain?",
+                    "choices": ["a", "b"]
+                }
+            }
+        });
+        assert!(route_agent_event_to_registry(&mut reg, pane, &p));
+
+        let s = reg.iter_sorted().into_iter().find(|s| s.key == "ask-asid").unwrap();
+        assert_eq!(s.status, AgentStatus::Attention);
+        assert_eq!(s.attention_reason.as_deref(), Some("Which folder do you want me to explain?"));
+        // current_tool must be recorded so the matching tool.completed
+        // (when the user answers) can demote Attention back to Idle.
+        assert_eq!(s.current_tool.as_deref(), Some("ask_user"));
+    }
+
+    #[test]
+    fn route_ask_user_attention_clears_when_tool_completes() {
+        // After the user answers, AfterTool fires with the same agent_session_id.
+        // Our existing alias maps that to ToolCompleted; the registry then sees
+        // current_tool="ask_user" (a user-input tool) and demotes Attention→Idle.
+        use crate::agent_sessions::{AgentSessionRegistry, AgentStatus};
+        let mut reg = AgentSessionRegistry::new();
+        let pane = "00000000-0000-0000-0000-0000000000ee";
+        let start = serde_json::json!({
+            "event": "agent.tool.starting",
+            "cli_source": "copilot",
+            "agent_session_id": "ask2",
+            "payload": {
+                "cwd": "C:\\proj",
+                "tool_name": "ask_user",
+                "tool_input": {"question": "Choose one"}
+            }
+        });
+        let done = serde_json::json!({
+            "event": "agent.tool.finished",
+            "cli_source": "copilot",
+            "agent_session_id": "ask2",
+            "payload": {"tool_name": "ask_user"}
+        });
+        route_agent_event_to_registry(&mut reg, pane, &start);
+        assert_eq!(
+            reg.iter_sorted().into_iter().find(|s| s.key == "ask2").unwrap().status,
+            AgentStatus::Attention,
+        );
+        route_agent_event_to_registry(&mut reg, pane, &done);
+        let s = reg.iter_sorted().into_iter().find(|s| s.key == "ask2").unwrap();
+        assert_eq!(s.status, AgentStatus::Idle);
+        assert!(s.current_tool.is_none());
+        assert!(s.attention_reason.is_none());
     }
 }

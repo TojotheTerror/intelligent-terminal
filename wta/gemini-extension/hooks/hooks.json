@@ -18,6 +18,15 @@
         }]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"${extensionPath}/hooks/send-event.ps1\" agent.prompt.submit"
+        }]
+      }
+    ],
     "BeforeTool": [
       {
         "matcher": ".*",
@@ -42,6 +51,15 @@
         "hooks": [{
           "type": "command",
           "command": "powershell -ExecutionPolicy Bypass -File \"${extensionPath}/hooks/send-event.ps1\" agent.notification"
+        }]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"${extensionPath}/hooks/send-event.ps1\" agent.stop"
         }]
       }
     ]

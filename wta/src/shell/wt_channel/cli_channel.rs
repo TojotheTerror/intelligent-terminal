@@ -56,6 +56,52 @@ fn resolve_wtcli_path() -> String {
     "wtcli".to_string()
 }
 
+/// Run `wtcli focus-pane -t <id>` on a background thread and log stdout/stderr
+/// on failure. Replaces `spawn_wtcli_async` for the focus-pane case so that
+/// silent failures (wrong GUID, dead pane, COM error) leave a trace in
+/// wta-main.log.
+pub fn spawn_wtcli_focus_pane(pane_session_id: &str) {
+    let path = resolve_wtcli_path();
+    let pane = pane_session_id.to_string();
+    std::thread::spawn(move || {
+        let args = ["focus-pane".to_string(), "-t".to_string(), pane.clone()];
+        let res = std::process::Command::new(&path)
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match res {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if out.status.success() {
+                    tracing::info!(
+                        target: "wtcli",
+                        target_pane = %pane,
+                        "focus-pane succeeded",
+                    );
+                } else {
+                    tracing::warn!(
+                        target: "wtcli",
+                        target_pane = %pane,
+                        code = out.status.code(),
+                        stderr = %stderr,
+                        "focus-pane exited non-zero",
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "wtcli",
+                    target_pane = %pane,
+                    %err,
+                    "focus-pane spawn failed",
+                );
+            }
+        }
+    });
+}
+
 /// Fire-and-forget invocation of wtcli for one-shot UI actions
 /// (focus-pane, split-pane). Errors are logged but not surfaced.
 ///
@@ -78,6 +124,140 @@ pub fn spawn_wtcli_async(args: &[String]) {
             tracing::warn!(target: "wtcli", path = %path, ?args, %err, "spawn failed");
         }
     }
+}
+
+/// Run `wtcli --json <args>`, parse the resulting `sessionId` (or `SessionId`)
+/// from stdout, then run `wtcli focus-pane -t <id>`. All performed on a
+/// background thread so the UI stays responsive.
+///
+/// Why this exists: wtcli's split-pane subcommand passes `background=true` to
+/// the COM `SplitPane` call (see `src/tools/wtcli/main.cpp:446`), which leaves
+/// focus on the splitting pane. For interactive paths like resuming a history
+/// session from the F2 list, we want the new pane focused. Rather than
+/// rebuild the C++ binary every dev cycle, we issue an explicit FocusPane
+/// after the split returns the new pane's GUID.
+///
+/// The args slice is the subcommand + its options (e.g. `["split-pane", "-c",
+/// "<commandline>"]`). `--json` is prepended automatically.
+pub fn spawn_wtcli_split_then_focus(args: &[String]) {
+    let path = resolve_wtcli_path();
+    let owned_args: Vec<String> = std::iter::once("--json".to_string())
+        .chain(args.iter().cloned())
+        .collect();
+
+    std::thread::spawn(move || {
+        let output = std::process::Command::new(&path)
+            .args(&owned_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        let output = match output {
+            Ok(o) => o,
+            Err(err) => {
+                tracing::warn!(
+                    target: "wtcli",
+                    path = %path,
+                    ?owned_args,
+                    %err,
+                    "split-pane spawn failed",
+                );
+                return;
+            }
+        };
+
+        if !output.status.success() {
+            tracing::warn!(
+                target: "wtcli",
+                path = %path,
+                ?owned_args,
+                code = output.status.code(),
+                "split-pane exited non-zero",
+            );
+            return;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value = match serde_json::from_str(stdout.trim()) {
+            Ok(v) => v,
+            Err(err) => {
+                tracing::warn!(
+                    target: "wtcli",
+                    %err,
+                    stdout = %stdout,
+                    "split-pane stdout was not valid JSON",
+                );
+                return;
+            }
+        };
+
+        // CreationResultToJson emits `session_id` (snake_case — see
+        // src/tools/wtcli/Formatting.cpp::CreationResultToJson). Older /
+        // alternate camel-case spellings are kept as fallbacks for
+        // forward-compat. Strip braces if the GUID arrived in `{...}`
+        // form, since FocusPane resolves either form.
+        let session_id = parsed.get("session_id")
+            .or_else(|| parsed.get("SessionId"))
+            .or_else(|| parsed.get("sessionId"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_matches(|c| c == '{' || c == '}').to_string());
+
+        let Some(session_id) = session_id else {
+            tracing::warn!(
+                target: "wtcli",
+                json = %parsed,
+                "split-pane JSON had no session_id field",
+            );
+            return;
+        };
+
+        tracing::info!(
+            target: "wtcli",
+            %session_id,
+            "split-pane returned new pane GUID, issuing focus-pane",
+        );
+
+        let focus_args = vec![
+            "focus-pane".to_string(),
+            "-t".to_string(),
+            session_id.clone(),
+        ];
+        match std::process::Command::new(&path)
+            .args(&focus_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+        {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if out.status.success() {
+                    tracing::info!(
+                        target: "wtcli",
+                        %session_id,
+                        "split-then-focus completed",
+                    );
+                } else {
+                    tracing::warn!(
+                        target: "wtcli",
+                        %session_id,
+                        code = out.status.code(),
+                        stderr = %stderr,
+                        "focus-pane after split exited non-zero",
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "wtcli",
+                    %session_id,
+                    %err,
+                    "focus-pane spawn failed after split",
+                );
+            }
+        }
+    });
 }
 
 /// Channel that invokes `wtcli.exe` for protocol operations.
