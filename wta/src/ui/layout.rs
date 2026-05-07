@@ -16,7 +16,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         (area, None)
     };
 
-    let rec_height = if app.recommendations.is_some() {
+    let rec_height = if app.current_tab().recommendations.is_some() {
         Constraint::Length(app.rec_panel_height())
     } else {
         Constraint::Length(0)
@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         debug_panel::render(frame, app, debug_area);
     }
 
-    if app.permission.is_some() {
+    if app.current_tab().permission.is_some() {
         permission::render(frame, app, area);
     }
 }
@@ -67,7 +67,7 @@ pub fn input_cursor_position(app: &App, area: Rect) -> Option<Position> {
         area
     };
 
-    let rec_height = if app.recommendations.is_some() {
+    let rec_height = if app.current_tab().recommendations.is_some() {
         Constraint::Length(app.rec_panel_height())
     } else {
         Constraint::Length(0)

@@ -6,7 +6,7 @@ use crate::coordinator::{OpenTarget, RecommendedAction};
 use crate::theme;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let Some(recommendations) = &app.recommendations else {
+    let Some(recommendations) = &app.current_tab().recommendations else {
         return;
     };
 
@@ -14,7 +14,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let single_choice = recommendations.choices.len() == 1;
 
     for (idx, choice) in recommendations.choices.iter().enumerate() {
-        let is_selected = idx == app.selected_recommendation;
+        let is_selected = idx == app.current_tab().selected_recommendation;
         let is_recommended = recommendations.recommended_choice == Some(choice.choice);
 
         // Skip the numbered title row when there is only one choice — the
@@ -91,7 +91,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         let button_spans = build_button_spans(
             &buttons,
             is_selected,
-            app.selected_button,
+            app.current_tab().selected_button,
             card_width,
         );
         lines.push(Line::from(button_spans));
@@ -112,7 +112,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let paragraph = Paragraph::new(lines)
         .block(Block::default().borders(Borders::NONE).padding(Padding::zero()))
         .wrap(Wrap { trim: false })
-        .scroll((app.rec_scroll as u16, 0));
+        .scroll((app.current_tab().rec_scroll as u16, 0));
     frame.render_widget(paragraph, area);
 }
 

@@ -30,7 +30,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let inner_area = inner.inner(area);
     let visible_height = inner_area.height as usize;
     let requested_lines = visible_height
-        .saturating_add(app.scroll_offset)
+        .saturating_add(app.current_tab().scroll_offset)
         .saturating_add(32);
 
     let mut reversed_lines: Vec<Line> = Vec::new();
@@ -42,16 +42,16 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let mut pending_lines = build_pending_stream_lines(app);
     reversed_lines.extend(pending_lines.drain(..).rev());
 
-    for (idx, msg) in app.messages.iter().enumerate().rev() {
-        let is_last_message = idx + 1 == app.messages.len();
-        let mut message_lines = build_message_lines(msg, is_last_message, app.agent_streaming);
+    for (idx, msg) in app.current_tab().messages.iter().enumerate().rev() {
+        let is_last_message = idx + 1 == app.current_tab().messages.len();
+        let mut message_lines = build_message_lines(msg, is_last_message, app.current_tab().agent_streaming);
         reversed_lines.extend(message_lines.drain(..).rev());
         if reversed_lines.len() >= requested_lines {
             break;
         }
     }
 
-    for (idx, turn) in app.completed_turns.iter().enumerate().rev() {
+    for (idx, turn) in app.current_tab().completed_turns.iter().enumerate().rev() {
         let selected = app.history_row_selected(idx);
         let expanded = app.history_row_expanded(idx);
         let mut turn_lines = build_completed_turn_lines(turn, selected, expanded);
@@ -64,7 +64,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line> = reversed_lines.into_iter().rev().collect();
 
     let total_lines = lines.len();
-    let scroll = total_lines.saturating_sub(visible_height.saturating_add(app.scroll_offset));
+    let scroll = total_lines.saturating_sub(visible_height.saturating_add(app.current_tab().scroll_offset));
 
     let paragraph = Paragraph::new(lines)
         .block(inner)
@@ -76,8 +76,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     ui_trace::log_slow("chat_render", render_started.elapsed(), || {
         format!(
             "messages={} pending_chars={} requested_lines={} visible_height={} area={}x{}",
-            app.messages.len(),
-            app.pending_agent_response.chars().count(),
+            app.current_tab().messages.len(),
+            app.current_tab().pending_agent_response.chars().count(),
             requested_lines,
             visible_height,
             area.width,
@@ -117,15 +117,15 @@ fn build_completed_turn_lines<'a>(
 }
 
 fn build_activity_line(app: &App) -> Option<Line<'static>> {
-    if !(app.prompt_in_flight || app.agent_streaming || app.progress_status.is_some()) {
+    if !(app.current_tab().prompt_in_flight || app.current_tab().agent_streaming || app.current_tab().progress_status.is_some()) {
         return None;
     }
 
     let mut spans = Vec::new();
-    let icon = ACTIVITY_ICON_FRAMES[app.activity_frame % ACTIVITY_ICON_FRAMES.len()];
+    let icon = ACTIVITY_ICON_FRAMES[app.current_tab().activity_frame % ACTIVITY_ICON_FRAMES.len()];
     spans.push(Span::styled(icon.to_string(), theme::IN_PROGRESS));
     spans.push(Span::raw(" "));
-    spans.extend(animated_activity_label(app.activity_frame));
+    spans.extend(animated_activity_label(app.current_tab().activity_frame));
 
     if let Some((preview, style)) = activity_preview(app) {
         spans.push(Span::styled(" ", theme::DIM));
@@ -153,7 +153,7 @@ fn animated_activity_label(frame: usize) -> Vec<Span<'static>> {
 }
 
 fn activity_preview(app: &App) -> Option<(String, Style)> {
-    app.progress_status
+    app.current_tab().progress_status
         .as_deref()
         // "Thinking..." is redundant now that the animated label says "thinking".
         .filter(|s| *s != "Thinking...")

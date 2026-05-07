@@ -310,13 +310,52 @@ pub enum AppEvent {
 
 // --- Per-tab session storage ---
 
+const DEFAULT_TAB_ID: &str = "0";
+
+/// Everything that conceptually belongs to one tab's conversation: the
+/// message history, the streaming buffer of the in-flight prompt, the
+/// pending tool calls, the recommendations panel state, etc.
+///
+/// `App` holds a `HashMap<TabId, TabSession>` and a `tab_id` pointing at
+/// the currently focused entry. Renderers read via `app.current_tab()`;
+/// event handlers route updates to the relevant `TabSession` rather than
+/// mutating shared `App` fields.
 #[derive(Default)]
-struct TabSession {
-    messages: Vec<ChatMessage>,
-    completed_turns: Vec<CompletedTurn>,
-    selected_history: Option<usize>,
-    expanded_history: Option<usize>,
-    scroll_offset: usize,
+pub struct TabSession {
+    // Conversation history
+    pub messages: Vec<ChatMessage>,
+    pub completed_turns: Vec<CompletedTurn>,
+    pub selected_history: Option<usize>,
+    pub expanded_history: Option<usize>,
+    pub scroll_offset: usize,
+
+    // Streaming state
+    pub prompt_in_flight: bool,
+    pub agent_streaming: bool,
+    pub pending_thought_response: String,
+    pub pending_agent_response: String,
+    pub progress_status: Option<String>,
+    pub activity_frame: usize,
+    pub timing_note: Option<String>,
+    pub selection_visible_pending: bool,
+
+    // Tool calls / permission / recommendations
+    pub tool_calls: HashMap<String, (String, String)>,
+    pub permission: Option<PermissionState>,
+    pub recommendations: Option<RecommendationSet>,
+    pub selected_recommendation: usize,
+    pub selected_button: usize,
+    pub rec_scroll: usize,
+
+    // Prompt identification / completion staging
+    pub current_prompt_id: Option<u64>,
+    pub current_prompt_submitted_at_unix_s: Option<f64>,
+    pub current_prompt_text: Option<String>,
+    pub pending_completed_turn: Option<CompletedTurn>,
+
+    // Filled in Milestone 2 once each tab has its own ACP SessionId.
+    #[allow(dead_code)]
+    pub session_id: Option<String>,
 }
 
 // --- App ---
@@ -332,38 +371,17 @@ pub struct App {
     pub available_models: Vec<AcpModelInfo>,
     pub current_model_id: Option<String>,
     pub prompt_name: Option<String>,
-    pub progress_status: Option<String>,
-    pub activity_frame: usize,
     pub session_id: String,
     #[allow(dead_code)]
     pub wt_connected: bool,
-    pub messages: Vec<ChatMessage>,
-    pub completed_turns: Vec<CompletedTurn>,
-    pub selected_history: Option<usize>,
-    pub expanded_history: Option<usize>,
     pub input: String,
     pub cursor_pos: usize,
-    pub tool_calls: HashMap<String, (String, String)>, // id -> (title, status)
-    pub permission: Option<PermissionState>,
-    pub scroll_offset: usize,
-    pub agent_streaming: bool,
-    pub recommendations: Option<RecommendationSet>,
-    pub selected_recommendation: usize,
-    pub selected_button: usize, // Send: 0 = Run (default), 1 = Insert. OpenAndSend: 0 = sole button.
-    pub rec_scroll: usize,
     pub terminal_rows: u16,
     pub terminal_cols: u16,
     pub should_quit: bool,
-    pub prompt_in_flight: bool,
-    current_prompt_id: Option<u64>,
-    current_prompt_submitted_at_unix_s: Option<f64>,
-    selection_visible_pending: bool,
     prompt_tx: mpsc::UnboundedSender<PromptSubmission>,
     recommendation_tx: mpsc::UnboundedSender<crate::coordinator::ChoiceExecution>,
     permission_tx: mpsc::UnboundedSender<String>,
-    pub pending_thought_response: String,
-    pub pending_agent_response: String,
-    pub timing_note: Option<String>,
     debug_capture_enabled: Arc<AtomicBool>,
     // Debug panel
     pub debug_messages: Vec<DebugMessage>,
@@ -373,9 +391,7 @@ pub struct App {
     pub pane_id: Option<String>,
     pub tab_id: Option<String>,
     pub window_id: Option<String>,
-    current_prompt_text: Option<String>,
-    pending_completed_turn: Option<CompletedTurn>,
-    // WT event notifications
+    // WT event notifications (global — affects bottom-bar / banner across tabs)
     pub wt_notifications: std::collections::VecDeque<WtNotification>,
     pub show_notification_banner: bool,
     // Auto-fix: the pane ID where the error occurred (used to auto-fill Send parent)
@@ -392,6 +408,10 @@ pub struct App {
     // None means the in-flight prompt is not an autofix prompt.
     inflight_autofix_generation: Option<u64>,
     // Per-tab conversation sessions. Keyed by tab_id string (0-based index).
+    // The active tab is `tab_id`, with `DEFAULT_TAB_ID` ("0") as fallback
+    // before the first `tab_changed` event arrives. Always contains at
+    // least an entry for the active tab; lazily extended on first
+    // `tab_changed` to a new tab.
     tab_sessions: HashMap<String, TabSession>,
 }
 
@@ -404,6 +424,8 @@ impl App {
         wt_connected: bool,
         autofix_enabled: bool,
     ) -> Self {
+        let mut tab_sessions = HashMap::new();
+        tab_sessions.insert(DEFAULT_TAB_ID.to_string(), TabSession::default());
         Self {
             state: ConnectionState::Connecting("Starting agent...".to_string()),
             agent_name: String::new(),
@@ -412,37 +434,16 @@ impl App {
             available_models: Vec::new(),
             current_model_id: None,
             prompt_name: None,
-            progress_status: None,
-            activity_frame: 0,
             session_id: String::new(),
             wt_connected,
-            messages: Vec::new(),
-            completed_turns: Vec::new(),
-            selected_history: None,
-            expanded_history: None,
             input: String::new(),
             cursor_pos: 0,
-            tool_calls: HashMap::new(),
-            permission: None,
-            scroll_offset: 0,
-            agent_streaming: false,
-            recommendations: None,
-            selected_recommendation: 0,
-            selected_button: 0, // default to "Run" button (Send: Run=0, Insert=1)
-            rec_scroll: 0,
             terminal_rows: 24,
             terminal_cols: 80,
             should_quit: false,
-            prompt_in_flight: false,
-            current_prompt_id: None,
-            current_prompt_submitted_at_unix_s: None,
-            selection_visible_pending: false,
             prompt_tx,
             recommendation_tx,
             permission_tx,
-            pending_thought_response: String::new(),
-            pending_agent_response: String::new(),
-            timing_note: None,
             debug_capture_enabled,
             debug_messages: Vec::new(),
             show_debug_panel: false,
@@ -450,8 +451,6 @@ impl App {
             pane_id: None,
             tab_id: None,
             window_id: None,
-            current_prompt_text: None,
-            pending_completed_turn: None,
             wt_notifications: VecDeque::new(),
             show_notification_banner: false,
             autofix_pane_id: None,
@@ -459,8 +458,42 @@ impl App {
             autofix_enabled,
             autofix_generation: 0,
             inflight_autofix_generation: None,
-            tab_sessions: HashMap::new(),
+            tab_sessions,
         }
+    }
+
+    /// Key used for lookup into `tab_sessions`. Falls back to
+    /// `DEFAULT_TAB_ID` until `tab_changed` from Windows Terminal arrives.
+    fn active_tab_key(&self) -> &str {
+        self.tab_id.as_deref().unwrap_or(DEFAULT_TAB_ID)
+    }
+
+    /// Read-only view of the currently focused tab's per-tab state. Always
+    /// non-panicking: `App::new` seeds `DEFAULT_TAB_ID` and
+    /// `tab_changed` lazily creates the entry for any new tab via
+    /// `current_tab_mut`/`tab_mut`.
+    pub fn current_tab(&self) -> &TabSession {
+        let key = self.active_tab_key();
+        self.tab_sessions
+            .get(key)
+            .expect("active tab session always materialized")
+    }
+
+    /// Mutable view of the currently focused tab's per-tab state.
+    /// Lazily inserts a default `TabSession` if the key is missing.
+    pub fn current_tab_mut(&mut self) -> &mut TabSession {
+        let key = self.tab_id.clone().unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
+        self.tab_sessions.entry(key).or_default()
+    }
+
+    /// Mutable view of an arbitrary tab's per-tab state, lazily inserting
+    /// a default `TabSession` if missing. Used by `tab_changed` and (in
+    /// Milestone 2) by chunk routing keyed on `SessionId`.
+    #[allow(dead_code)]
+    pub fn tab_mut(&mut self, tab_id: &str) -> &mut TabSession {
+        self.tab_sessions
+            .entry(tab_id.to_string())
+            .or_default()
     }
 
     pub async fn run(
@@ -653,23 +686,24 @@ impl App {
     }
 
     fn trace_state(&self) -> String {
+        let tab = self.current_tab();
         format!(
             "state={:?} messages={} completed_turns={} input_chars={} thought_chars={} pending_chars={} scroll={} streaming={} activity_frame={} recommendations={} permission={} timing_note={}",
             self.state,
-            self.messages.len(),
-            self.completed_turns.len(),
+            tab.messages.len(),
+            tab.completed_turns.len(),
             self.input.chars().count(),
-            self.pending_thought_response.chars().count(),
-            self.pending_agent_response.chars().count(),
-            self.scroll_offset,
-            self.agent_streaming,
-            self.activity_frame,
-            self.recommendations
+            tab.pending_thought_response.chars().count(),
+            tab.pending_agent_response.chars().count(),
+            tab.scroll_offset,
+            tab.agent_streaming,
+            tab.activity_frame,
+            tab.recommendations
                 .as_ref()
                 .map(|recs| recs.choices.len())
                 .unwrap_or(0),
-            self.permission.is_some(),
-            self.timing_note.is_some()
+            tab.permission.is_some(),
+            tab.timing_note.is_some()
         )
     }
 
@@ -677,7 +711,7 @@ impl App {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::MouseScroll { delta, row } => {
-                if self.recommendations.is_some() {
+                if self.current_tab_mut().recommendations.is_some() {
                     // Route based on where the mouse is.
                     // Recs panel sits just above the input (bottom of screen).
                     let input_h: u16 = 3; // INPUT_MIN_HEIGHT
@@ -689,30 +723,39 @@ impl App {
                         //   delta>0 (wheel down) → show lower content → rec_scroll increases
                         //   delta<0 (wheel up)   → show higher content → rec_scroll decreases
                         if delta > 0 {
-                            self.rec_scroll = self.rec_scroll.saturating_add(delta as usize);
+                            self.current_tab_mut().rec_scroll = self.current_tab_mut().rec_scroll.saturating_add(delta as usize);
                         } else {
-                            self.rec_scroll = self.rec_scroll.saturating_sub((-delta) as usize);
+                            self.current_tab_mut().rec_scroll = self.current_tab_mut().rec_scroll.saturating_sub((-delta) as usize);
                         }
                     } else {
                         // Mouse is in the chat area: scroll chat history.
                         if delta < 0 {
-                            self.scroll_offset = self.scroll_offset.saturating_add((-delta) as usize);
+                            self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_add((-delta) as usize);
                         } else {
-                            self.scroll_offset = self.scroll_offset.saturating_sub(delta as usize);
+                            self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_sub(delta as usize);
                         }
                     }
                 } else {
                     // No recs visible — scroll chat.
                     if delta < 0 {
-                        self.scroll_offset = self.scroll_offset.saturating_add((-delta) as usize);
+                        self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_add((-delta) as usize);
                     } else {
-                        self.scroll_offset = self.scroll_offset.saturating_sub(delta as usize);
+                        self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_sub(delta as usize);
                     }
                 }
             }
             AppEvent::Tick => {
-                if self.has_activity_indicator() {
-                    self.activity_frame = (self.activity_frame + 1) % 10; // Must match ACTIVITY_HIGHLIGHT_WINDOWS.len() in ui/chat.rs
+                // Fan out across all tabs: a background tab with an in-flight
+                // prompt should keep its spinner advancing so when the user
+                // switches back the animation is in step. Must match
+                // ACTIVITY_HIGHLIGHT_WINDOWS.len() in ui/chat.rs.
+                for tab in self.tab_sessions.values_mut() {
+                    if tab.prompt_in_flight
+                        || tab.agent_streaming
+                        || tab.progress_status.is_some()
+                    {
+                        tab.activity_frame = (tab.activity_frame + 1) % 10;
+                    }
                 }
                 // Age and auto-dismiss notifications
                 for n in self.wt_notifications.iter_mut() {
@@ -734,7 +777,7 @@ impl App {
                 self.publish_agent_status();
             }
             AppEvent::ProgressStatus(status) => {
-                self.progress_status = Some(status);
+                self.current_tab_mut().progress_status = Some(status);
                 self.scroll_to_bottom();
             }
             AppEvent::AgentConnected {
@@ -760,33 +803,33 @@ impl App {
             AppEvent::AgentError(msg) => {
                 self.state = ConnectionState::Failed(msg.clone());
                 self.publish_agent_status();
-                self.prompt_in_flight = false;
-                self.agent_streaming = false;
-                self.progress_status = None;
-                self.pending_thought_response.clear();
-                self.activity_frame = 0;
-                self.pending_agent_response.clear();
-                self.timing_note = None;
-                self.pending_completed_turn = None;
-                self.messages.push(ChatMessage::Error(msg));
+                self.current_tab_mut().prompt_in_flight = false;
+                self.current_tab_mut().agent_streaming = false;
+                self.current_tab_mut().progress_status = None;
+                self.current_tab_mut().pending_thought_response.clear();
+                self.current_tab_mut().activity_frame = 0;
+                self.current_tab_mut().pending_agent_response.clear();
+                self.current_tab_mut().timing_note = None;
+                self.current_tab_mut().pending_completed_turn = None;
+                self.current_tab_mut().messages.push(ChatMessage::Error(msg));
             }
             AppEvent::ExecutionInfo(message) => {
                 self.push_execution_info(message);
                 self.scroll_to_bottom();
             }
             AppEvent::AgentThoughtChunk(text) => {
-                self.prompt_in_flight = true;
-                if self.progress_status.is_none() {
-                    self.progress_status = Some("Thinking...".to_string());
+                self.current_tab_mut().prompt_in_flight = true;
+                if self.current_tab_mut().progress_status.is_none() {
+                    self.current_tab_mut().progress_status = Some("Thinking...".to_string());
                 }
-                append_thought_preview(&mut self.pending_thought_response, &text);
+                append_thought_preview(&mut self.current_tab_mut().pending_thought_response, &text);
             }
             AppEvent::AgentMessageChunk(text) => {
-                self.agent_streaming = true;
-                self.prompt_in_flight = true;
-                self.progress_status = None;
-                self.pending_thought_response.clear();
-                self.pending_agent_response.push_str(&text);
+                self.current_tab_mut().agent_streaming = true;
+                self.current_tab_mut().prompt_in_flight = true;
+                self.current_tab_mut().progress_status = None;
+                self.current_tab_mut().pending_thought_response.clear();
+                self.current_tab_mut().pending_agent_response.push_str(&text);
             }
             AppEvent::AgentMessageEnd => {
                 // Check if this response is stale (generation bumped since we sent).
@@ -798,22 +841,22 @@ impl App {
                 if is_stale_autofix {
                     // Discard: a newer error or cancel superseded this response.
                     tracing::info!(target: "autofix", inflight_gen = ?self.inflight_autofix_generation, current_gen = self.autofix_generation, "discarding stale autofix response");
-                    self.agent_streaming = false;
-                    self.prompt_in_flight = false;
-                    self.progress_status = None;
-                    self.pending_thought_response.clear();
-                    self.pending_agent_response.clear();
-                    self.activity_frame = 0;
+                    self.current_tab_mut().agent_streaming = false;
+                    self.current_tab_mut().prompt_in_flight = false;
+                    self.current_tab_mut().progress_status = None;
+                    self.current_tab_mut().pending_thought_response.clear();
+                    self.current_tab_mut().pending_agent_response.clear();
+                    self.current_tab_mut().activity_frame = 0;
                     self.inflight_autofix_generation = None;
                     return;
                 }
 
                 // Always reset streaming flags so autofix guards don't get stuck.
-                self.agent_streaming = false;
-                self.prompt_in_flight = false;
-                self.progress_status = None;
-                self.pending_thought_response.clear();
-                self.activity_frame = 0;
+                self.current_tab_mut().agent_streaming = false;
+                self.current_tab_mut().prompt_in_flight = false;
+                self.current_tab_mut().progress_status = None;
+                self.current_tab_mut().pending_thought_response.clear();
+                self.current_tab_mut().activity_frame = 0;
                 self.inflight_autofix_generation = None;
 
                 {
@@ -831,21 +874,21 @@ impl App {
                 }
             }
             AppEvent::TimingMetric(note) => {
-                self.timing_note = Some(note);
+                self.current_tab_mut().timing_note = Some(note);
             }
             AppEvent::ToolCall { id, title, status } => {
-                self.tool_calls
+                self.current_tab_mut().tool_calls
                     .insert(id.clone(), (title.clone(), status.clone()));
-                self.messages
+                self.current_tab_mut().messages
                     .push(ChatMessage::ToolCall { id, title, status });
                 self.scroll_to_bottom();
             }
             AppEvent::ToolCallUpdate { id, status } => {
-                if let Some(entry) = self.tool_calls.get_mut(&id) {
+                if let Some(entry) = self.current_tab_mut().tool_calls.get_mut(&id) {
                     entry.1 = status.clone();
                 }
                 // Update in-place in messages
-                for msg in &mut self.messages {
+                for msg in &mut self.current_tab_mut().messages {
                     if let ChatMessage::ToolCall {
                         id: ref mid,
                         status: ref mut s,
@@ -859,7 +902,7 @@ impl App {
                 }
             }
             AppEvent::Plan(entries) => {
-                self.messages.push(ChatMessage::Plan(entries));
+                self.current_tab_mut().messages.push(ChatMessage::Plan(entries));
                 self.scroll_to_bottom();
             }
             AppEvent::PermissionRequest {
@@ -867,7 +910,7 @@ impl App {
                 options,
                 responder,
             } => {
-                self.permission = Some(PermissionState {
+                self.current_tab_mut().permission = Some(PermissionState {
                     description,
                     options,
                     selected: 0,
@@ -875,7 +918,7 @@ impl App {
                 });
             }
             AppEvent::SystemMessage(message) => {
-                self.messages.push(ChatMessage::System(message));
+                self.current_tab_mut().messages.push(ChatMessage::System(message));
                 self.scroll_to_bottom();
             }
             AppEvent::DebugPipeMessage(msg) => {
@@ -937,7 +980,7 @@ impl App {
                 // Always log to chat for critical/actionable events
                 match notification.severity {
                     WtEventSeverity::Critical => {
-                        self.messages
+                        self.current_tab_mut().messages
                             .push(ChatMessage::Error(notification.summary.clone()));
                         self.show_notification_banner = true;
                         self.scroll_to_bottom();
@@ -965,7 +1008,7 @@ impl App {
                         } else {
                             // Autofix disabled: surface the event in chat so the
                             // user still sees it.
-                            self.messages
+                            self.current_tab_mut().messages
                                 .push(ChatMessage::System(notification.summary.clone()));
                             self.scroll_to_bottom();
                         }
@@ -992,9 +1035,9 @@ impl App {
                                 // check in AgentMessageEnd relies on Some(old) != new_gen.
                                 let pane = self.autofix_pane_id.take().unwrap();
                                 self.clear_recommendations();
-                                self.prompt_in_flight = false;
-                                self.agent_streaming = false;
-                                self.progress_status = None;
+                                self.current_tab_mut().prompt_in_flight = false;
+                                self.current_tab_mut().agent_streaming = false;
+                                self.current_tab_mut().progress_status = None;
                                 self.emit_autofix_state_cleared(&pane);
                             }
                             // Suggested: dismiss on prompt activity (exit-zero or
@@ -1031,7 +1074,7 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) {
         // If permission modal is showing, route keys there
-        if let Some(ref mut perm) = self.permission {
+        if let Some(ref mut perm) = self.current_tab_mut().permission {
             match key.code {
                 KeyCode::Up => {
                     if perm.selected > 0 {
@@ -1046,7 +1089,7 @@ impl App {
                 KeyCode::Enter => {
                     let option_id = perm.options[perm.selected].id.clone();
                     // Take ownership to send
-                    if let Some(perm) = self.permission.take() {
+                    if let Some(perm) = self.current_tab_mut().permission.take() {
                         if let Some(responder) = perm.responder {
                             let _ = responder.send(option_id);
                         } else {
@@ -1058,7 +1101,7 @@ impl App {
                     // Quick allow: find first allow option
                     if let Some(idx) = perm.options.iter().position(|o| o.kind.contains("allow")) {
                         let option_id = perm.options[idx].id.clone();
-                        if let Some(perm) = self.permission.take() {
+                        if let Some(perm) = self.current_tab_mut().permission.take() {
                             if let Some(responder) = perm.responder {
                                 let _ = responder.send(option_id);
                             } else {
@@ -1071,7 +1114,7 @@ impl App {
                     // Quick deny: find first reject option
                     if let Some(idx) = perm.options.iter().position(|o| o.kind.contains("reject")) {
                         let option_id = perm.options[idx].id.clone();
-                        if let Some(perm) = self.permission.take() {
+                        if let Some(perm) = self.current_tab_mut().permission.take() {
                             if let Some(responder) = perm.responder {
                                 let _ = responder.send(option_id);
                             } else {
@@ -1086,39 +1129,44 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Up if self.input.is_empty() && self.recommendations.is_some() => {
-                if self.selected_recommendation > 0 {
-                    self.selected_recommendation -= 1;
-                    self.selected_button = self.default_button_for_selected();
+            KeyCode::Up if self.input.is_empty() && self.current_tab_mut().recommendations.is_some() => {
+                if self.current_tab_mut().selected_recommendation > 0 {
+                    self.current_tab_mut().selected_recommendation -= 1;
+                    self.current_tab_mut().selected_button = self.default_button_for_selected();
                     self.scroll_rec_to_selected();
                 }
             }
-            KeyCode::Down if self.input.is_empty() && self.recommendations.is_some() => {
-                if let Some(recs) = &self.recommendations {
-                    if self.selected_recommendation + 1 < recs.choices.len() {
-                        self.selected_recommendation += 1;
-                        self.selected_button = self.default_button_for_selected();
-                        self.scroll_rec_to_selected();
-                    }
+            KeyCode::Down if self.input.is_empty() && self.current_tab().recommendations.is_some() => {
+                let choices_len = self
+                    .current_tab()
+                    .recommendations
+                    .as_ref()
+                    .map(|r| r.choices.len())
+                    .unwrap_or(0);
+                if self.current_tab().selected_recommendation + 1 < choices_len {
+                    let default_btn = self.default_button_for_selected();
+                    self.current_tab_mut().selected_recommendation += 1;
+                    self.current_tab_mut().selected_button = default_btn;
+                    self.scroll_rec_to_selected();
                 }
             }
             KeyCode::Right | KeyCode::Tab
-                if self.input.is_empty() && self.recommendations.is_some() =>
+                if self.input.is_empty() && self.current_tab_mut().recommendations.is_some() =>
             {
                 // Cycle button focus forward within the selected card.
                 // Send: 0=Run, 1=Insert. OpenAndSend has only index 0.
                 let button_count = self.button_count_for_selected();
                 if button_count > 1 {
-                    self.selected_button = (self.selected_button + 1) % button_count;
+                    self.current_tab_mut().selected_button = (self.current_tab_mut().selected_button + 1) % button_count;
                 }
             }
             KeyCode::Left
-                if self.input.is_empty() && self.recommendations.is_some() =>
+                if self.input.is_empty() && self.current_tab_mut().recommendations.is_some() =>
             {
                 // Cycle button focus backward.
                 let button_count = self.button_count_for_selected();
                 if button_count > 1 {
-                    self.selected_button = (self.selected_button + button_count - 1) % button_count;
+                    self.current_tab_mut().selected_button = (self.current_tab_mut().selected_button + button_count - 1) % button_count;
                 }
             }
             KeyCode::Up if self.history_navigation_enabled() => {
@@ -1147,9 +1195,9 @@ impl App {
                 return;
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.agent_streaming {
+                if self.current_tab_mut().agent_streaming {
                     // TODO: send cancel to agent
-                    self.agent_streaming = false;
+                    self.current_tab_mut().agent_streaming = false;
                 } else {
                     self.should_quit = true;
                 }
@@ -1158,16 +1206,16 @@ impl App {
                 self.dismiss_notifications();
             }
             KeyCode::Esc
-                if self.recommendations.is_some()
-                    || (self.autofix_pane_id.is_some() && self.prompt_in_flight) =>
+                if self.current_tab_mut().recommendations.is_some()
+                    || (self.autofix_pane_id.is_some() && self.current_tab_mut().prompt_in_flight) =>
             {
                 // Dismiss armed fix card or cancel in-flight autofix request.
                 self.autofix_generation = self.autofix_generation.wrapping_add(1);
                 let pane = self.autofix_pane_id.take();
                 self.clear_recommendations();
-                self.prompt_in_flight = false;
-                self.agent_streaming = false;
-                self.progress_status = None;
+                self.current_tab_mut().prompt_in_flight = false;
+                self.current_tab_mut().agent_streaming = false;
+                self.current_tab_mut().progress_status = None;
                 self.inflight_autofix_generation = None;
                 if let Some(p) = pane {
                     self.emit_autofix_state_cleared(&p);
@@ -1198,15 +1246,16 @@ impl App {
                 self.insert_input_char('\n');
             }
             KeyCode::Enter => {
-                tracing::debug!(target: "autofix", input_empty = self.input.is_empty(), state = ?self.state, has_recs = self.recommendations.is_some(), autofix_pane = ?self.autofix_pane_id, selected_idx = self.selected_recommendation, "Enter");
+                let _tab = self.current_tab();
+                tracing::debug!(target: "autofix", input_empty = self.input.is_empty(), state = ?self.state, has_recs = _tab.recommendations.is_some(), autofix_pane = ?self.autofix_pane_id, selected_idx = _tab.selected_recommendation, "Enter");
                 if self.input.is_empty()
                     && self.state == ConnectionState::Connected
-                    && self.recommendations.is_some()
+                    && self.current_tab_mut().recommendations.is_some()
                 {
-                    if let Some(mut choice) = self.selected_recommendation().cloned() {
+                    if let Some(mut choice) = self.selected_recommendation_choice().cloned() {
                         // Send: index 0 = Run, index 1 = Insert.
                         // OpenAndSend: sole index 0 = open target.
-                        let insert_only = self.selected_button == 1
+                        let insert_only = self.current_tab_mut().selected_button == 1
                             && self.is_send_choice(&choice);
                         tracing::info!(target: "autofix", choice = choice.choice, actions = choice.actions.len(), insert_only, "Executing choice");
                         // Auto-fill parent for Send actions from auto-fix.
@@ -1243,7 +1292,7 @@ impl App {
                     self.input.clear();
                     self.cursor_pos = 0;
                     self.prepare_for_new_prompt(&text);
-                    self.messages.push(ChatMessage::User(text.clone()));
+                    self.current_tab_mut().messages.push(ChatMessage::User(text.clone()));
                     self.scroll_to_bottom();
                     let pane_context = PaneContext {
                         pane_id: self.pane_id.clone(),
@@ -1253,9 +1302,9 @@ impl App {
                         source_pane_id: None,
                     };
                     let prompt = PromptSubmission::new(text, Some(pane_context));
-                    self.current_prompt_id = Some(prompt.id);
-                    self.current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
-                    self.selection_visible_pending = false;
+                    self.current_tab_mut().current_prompt_id = Some(prompt.id);
+                    self.current_tab_mut().current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
+                    self.current_tab_mut().selection_visible_pending = false;
                     prompt_timing_log(
                         prompt.id,
                         prompt.submitted_at_unix_s,
@@ -1290,10 +1339,10 @@ impl App {
                 self.cursor_pos = self.input.len();
             }
             KeyCode::PageUp => {
-                self.scroll_offset = self.scroll_offset.saturating_add(10);
+                self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_add(10);
             }
             KeyCode::PageDown => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_sub(10);
             }
             KeyCode::Char(c) => {
                 self.insert_input_char(c);
@@ -1303,13 +1352,12 @@ impl App {
     }
 
     fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = 0;
+        self.current_tab_mut().scroll_offset = 0;
     }
 
     fn has_activity_indicator(&self) -> bool {
-        self.prompt_in_flight
-            || self.agent_streaming
-            || self.progress_status.is_some()
+        let tab = self.current_tab();
+        tab.prompt_in_flight || tab.agent_streaming || tab.progress_status.is_some()
     }
 
     /// Get the most recent unacknowledged notification (for the banner).
@@ -1394,7 +1442,7 @@ impl App {
 
     /// Height of the recommendations panel — grows to fit content, capped at 40% of pane height.
     pub fn rec_panel_height(&self) -> u16 {
-        let recs = match self.recommendations.as_ref() {
+        let recs = match self.current_tab().recommendations.as_ref() {
             Some(r) => r,
             None => return 0,
         };
@@ -1412,29 +1460,29 @@ impl App {
     }
 
     fn clear_recommendations(&mut self) {
-        self.recommendations = None;
-        self.selected_recommendation = 0;
-        self.selected_button = 0;
-        self.rec_scroll = 0;
+        self.current_tab_mut().recommendations = None;
+        self.current_tab_mut().selected_recommendation = 0;
+        self.current_tab_mut().selected_button = 0;
+        self.current_tab_mut().rec_scroll = 0;
     }
 
     /// Adjusts rec_scroll so the selected recommendation card's title is at the top of the panel.
     fn scroll_rec_to_selected(&mut self) {
         let panel_height = self.rec_panel_height() as usize; // actual panel size, not full pane
         let panel_width = self.terminal_cols;
-        let Some(recs) = self.recommendations.clone() else { return };
+        let Some(recs) = self.current_tab_mut().recommendations.clone() else { return };
 
         // Accumulate line offsets to find the exact top of the selected card.
         let mut line_top: usize = 0;
         for (idx, choice) in recs.choices.iter().enumerate() {
             let card_h = rec_card_height(choice, panel_width);
-            if idx == self.selected_recommendation {
+            if idx == self.current_tab_mut().selected_recommendation {
                 // Scroll so title is at the top; if the card fits, keep it fully visible.
                 let card_bottom = line_top + card_h;
-                if line_top < self.rec_scroll {
-                    self.rec_scroll = line_top;
-                } else if card_bottom > self.rec_scroll + panel_height {
-                    self.rec_scroll = line_top;
+                if line_top < self.current_tab_mut().rec_scroll {
+                    self.current_tab_mut().rec_scroll = line_top;
+                } else if card_bottom > self.current_tab_mut().rec_scroll + panel_height {
+                    self.current_tab_mut().rec_scroll = line_top;
                 }
                 return;
             }
@@ -1443,111 +1491,91 @@ impl App {
     }
 
     pub fn history_navigation_enabled(&self) -> bool {
+        let tab = self.current_tab();
         self.input.is_empty()
-            && self.recommendations.is_none()
-            && self.permission.is_none()
-            && !self.prompt_in_flight
-            && !self.agent_streaming
-            && self.messages.is_empty()
-            && self.pending_agent_response.is_empty()
-            && self.pending_thought_response.is_empty()
-            && !self.completed_turns.is_empty()
+            && tab.recommendations.is_none()
+            && tab.permission.is_none()
+            && !tab.prompt_in_flight
+            && !tab.agent_streaming
+            && tab.messages.is_empty()
+            && tab.pending_agent_response.is_empty()
+            && tab.pending_thought_response.is_empty()
+            && !tab.completed_turns.is_empty()
     }
 
     pub fn history_row_selected(&self, index: usize) -> bool {
-        self.selected_history == Some(index)
+        self.current_tab().selected_history == Some(index)
     }
 
     pub fn history_row_expanded(&self, index: usize) -> bool {
-        self.expanded_history == Some(index)
+        self.current_tab().expanded_history == Some(index)
     }
 
+    /// Switch the active tab. Per-tab state lives in `tab_sessions`, so all
+    /// this does is materialize the destination entry (if missing) and
+    /// update `tab_id`. No swapping or copying — the previous tab's state
+    /// stays exactly where it was.
     fn switch_tab_session(&mut self, new_tab_id: String) {
         let old_tab = self.tab_id.clone();
+        let entry = self.tab_sessions.entry(new_tab_id.clone()).or_default();
         tracing::info!(
             target: "tab_session",
             from = ?old_tab,
             to = %new_tab_id,
-            completed_turns = self.completed_turns.len(),
-            messages = self.messages.len(),
+            target_completed_turns = entry.completed_turns.len(),
+            target_messages = entry.messages.len(),
             "switch_tab_session"
         );
-
-        if let Some(ref cur) = old_tab {
-            if *cur != new_tab_id {
-                let s = self.tab_sessions.entry(cur.clone()).or_default();
-                s.messages = std::mem::take(&mut self.messages);
-                s.completed_turns = std::mem::take(&mut self.completed_turns);
-                s.selected_history = self.selected_history.take();
-                s.expanded_history = self.expanded_history.take();
-                s.scroll_offset = self.scroll_offset;
-                tracing::info!(
-                    target: "tab_session",
-                    tab = %cur,
-                    saved_turns = s.completed_turns.len(),
-                    "saved session"
-                );
-            }
-        }
-
-        let loaded = self.tab_sessions.remove(&new_tab_id).unwrap_or_default();
-        tracing::info!(
-            target: "tab_session",
-            tab = %new_tab_id,
-            loaded_turns = loaded.completed_turns.len(),
-            "loaded session"
-        );
-        self.messages = loaded.messages;
-        self.completed_turns = loaded.completed_turns;
-        self.selected_history = loaded.selected_history;
-        self.expanded_history = loaded.expanded_history;
-        self.scroll_offset = loaded.scroll_offset;
-
         self.tab_id = Some(new_tab_id);
     }
 
     fn clear_chat_history(&mut self) {
-        self.messages.clear();
-        self.tool_calls.clear();
-        self.permission = None;
-        self.progress_status = None;
-        self.pending_thought_response.clear();
-        self.activity_frame = 0;
-        self.pending_agent_response.clear();
-        self.agent_streaming = false;
-        self.scroll_offset = 0;
-        self.timing_note = None;
-        self.selection_visible_pending = false;
-        self.current_prompt_text = None;
-        self.current_prompt_submitted_at_unix_s = None;
-        self.pending_completed_turn = None;
+        {
+            let tab = self.current_tab_mut();
+            tab.messages.clear();
+            tab.tool_calls.clear();
+            tab.permission = None;
+            tab.progress_status = None;
+            tab.pending_thought_response.clear();
+            tab.activity_frame = 0;
+            tab.pending_agent_response.clear();
+            tab.agent_streaming = false;
+            tab.scroll_offset = 0;
+            tab.timing_note = None;
+            tab.selection_visible_pending = false;
+            tab.current_prompt_text = None;
+            tab.current_prompt_submitted_at_unix_s = None;
+            tab.pending_completed_turn = None;
+        }
         self.clear_recommendations();
     }
 
     fn clear_completed_turn_history(&mut self) {
-        self.messages.clear();
-        self.tool_calls.clear();
-        self.permission = None;
-        self.progress_status = None;
-        self.pending_thought_response.clear();
-        self.activity_frame = 0;
-        self.pending_agent_response.clear();
-        self.agent_streaming = false;
-        self.scroll_offset = 0;
-        self.selection_visible_pending = false;
-        self.current_prompt_text = None;
-        self.current_prompt_submitted_at_unix_s = None;
+        let tab = self.current_tab_mut();
+        tab.messages.clear();
+        tab.tool_calls.clear();
+        tab.permission = None;
+        tab.progress_status = None;
+        tab.pending_thought_response.clear();
+        tab.activity_frame = 0;
+        tab.pending_agent_response.clear();
+        tab.agent_streaming = false;
+        tab.scroll_offset = 0;
+        tab.selection_visible_pending = false;
+        tab.current_prompt_text = None;
+        tab.current_prompt_submitted_at_unix_s = None;
     }
 
     fn completion_latency_summary(&self) -> Option<String> {
         let mut parts = Vec::new();
+        let tab = self.current_tab();
 
-        if let Some(submitted_at) = self.current_prompt_submitted_at_unix_s {
+        if let Some(submitted_at) = tab.current_prompt_submitted_at_unix_s {
             let total_s = (now_unix_s() - submitted_at).max(0.0);
             parts.push(format!("total {:.3}s", total_s));
         }
 
-        if let Some(note) = self.timing_note.as_deref().filter(|note| !note.is_empty()) {
+        if let Some(note) = tab.timing_note.as_deref().filter(|note| !note.is_empty()) {
             parts.push(note.to_string());
         }
 
@@ -1602,7 +1630,7 @@ impl App {
         // any in-flight response and start fresh.
         let same_pane = self.autofix_pane_id.as_deref() == Some(notification.pane_id.as_str());
 
-        if same_pane && self.prompt_in_flight {
+        if same_pane && self.current_tab_mut().prompt_in_flight {
             // Same pane, already Pending: re-emit pending with new summary
             // but don't send another prompt (agent is already working on it).
             tracing::info!(target: "autofix", pane_id = %notification.pane_id, "autofix re-trigger same pane while pending — re-emit only");
@@ -1614,8 +1642,8 @@ impl App {
         // bump generation to stale any in-flight response, clear current state.
         self.autofix_generation = self.autofix_generation.wrapping_add(1);
         self.clear_recommendations();
-        self.agent_streaming = false;
-        self.prompt_in_flight = false;
+        self.current_tab_mut().agent_streaming = false;
+        self.current_tab_mut().prompt_in_flight = false;
         // A new analysis supersedes any leftover suggestion. The C++ side
         // will swap to Pending on the new pending event below; emitting an
         // explicit cleared first would create a flicker.
@@ -1641,14 +1669,14 @@ impl App {
         // Store the failing pane ID so we can auto-fill `parent` on execution.
         self.autofix_pane_id = Some(notification.pane_id.clone());
 
-        self.prompt_in_flight = true;
+        self.current_tab_mut().prompt_in_flight = true;
         self.inflight_autofix_generation = Some(self.autofix_generation);
-        self.progress_status = Some("Preparing context...".to_string());
-        self.activity_frame = 0;
+        self.current_tab_mut().progress_status = Some("Preparing context...".to_string());
+        self.current_tab_mut().activity_frame = 0;
 
         let prompt = PromptSubmission::new_autofix(prompt_text, Some(pane_context));
-        self.current_prompt_id = Some(prompt.id);
-        self.current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
+        self.current_tab_mut().current_prompt_id = Some(prompt.id);
+        self.current_tab_mut().current_prompt_submitted_at_unix_s = Some(prompt.submitted_at_unix_s);
         tracing::info!(target: "autofix", pane_id = %notification.pane_id, generation = self.autofix_generation, "sending auto-fix prompt");
         let _ = self.prompt_tx.send(prompt);
 
@@ -1695,7 +1723,7 @@ impl App {
     /// window). Mirrors the Enter-key path in the recommendations handler
     /// but without requiring the agent pane to be focused.
     fn handle_autofix_execute_request(&mut self, requested_pane_id: &str) {
-        tracing::info!(target: "autofix", requested_pane = %requested_pane_id, armed_pane = ?self.autofix_pane_id, has_recs = self.recommendations.is_some(), "autofix_execute received");
+        tracing::info!(target: "autofix", requested_pane = %requested_pane_id, armed_pane = ?self.autofix_pane_id, has_recs = self.current_tab().recommendations.is_some(), "autofix_execute received");
         // Only execute if we have a cached autofix for the requested pane.
         // The pane_id check prevents a stale UI click from running against
         // an unrelated, more recent error.
@@ -1708,7 +1736,7 @@ impl App {
                 return;
             }
         };
-        let rec = match self.recommendations.clone() {
+        let rec = match self.current_tab_mut().recommendations.clone() {
             Some(r) => r,
             None => {
                 self.emit_autofix_state_cleared(&armed_pane);
@@ -1718,7 +1746,7 @@ impl App {
         };
         let idx = rec
             .recommended_choice
-            .unwrap_or(self.selected_recommendation)
+            .unwrap_or(self.current_tab_mut().selected_recommendation)
             .min(rec.choices.len().saturating_sub(1));
         let Some(mut choice) = rec.choices.get(idx).cloned() else {
             self.emit_autofix_state_cleared(&armed_pane);
@@ -1780,16 +1808,16 @@ impl App {
 
     fn prepare_for_new_prompt(&mut self, prompt_text: &str) {
         self.clear_chat_history();
-        self.current_prompt_text = Some(prompt_text.to_string());
-        self.prompt_in_flight = true;
-        self.progress_status = Some("Preparing context...".to_string());
-        self.activity_frame = 0;
+        self.current_tab_mut().current_prompt_text = Some(prompt_text.to_string());
+        self.current_tab_mut().prompt_in_flight = true;
+        self.current_tab_mut().progress_status = Some("Preparing context...".to_string());
+        self.current_tab_mut().activity_frame = 0;
     }
 
     fn push_execution_info(&mut self, _message: String) {}
 
     fn current_turn_details(&self) -> Vec<ChatMessage> {
-        self.messages
+        self.current_tab().messages
             .iter()
             .filter(|message| !matches!(message, ChatMessage::User(_)))
             .cloned()
@@ -1797,87 +1825,89 @@ impl App {
     }
 
     fn stage_completed_turn(&mut self, agent_text: String) {
-        let Some(prompt) = self.current_prompt_text.clone() else {
-            self.pending_completed_turn = None;
+        let Some(prompt) = self.current_tab_mut().current_prompt_text.clone() else {
+            self.current_tab_mut().pending_completed_turn = None;
             return;
         };
 
         let mut details = self.current_turn_details();
         details.push(ChatMessage::Agent(agent_text));
-        self.pending_completed_turn = Some(CompletedTurn { prompt, details });
+        self.current_tab_mut().pending_completed_turn = Some(CompletedTurn { prompt, details });
     }
 
     fn commit_pending_completed_turn(&mut self) {
-        let Some(turn) = self.pending_completed_turn.take() else {
+        let Some(turn) = self.current_tab_mut().pending_completed_turn.take() else {
             return;
         };
 
-        self.completed_turns.push(turn);
+        self.current_tab_mut().completed_turns.push(turn);
         self.focus_latest_completed_turn();
     }
 
     fn focus_latest_completed_turn(&mut self) {
-        let Some(last) = self.completed_turns.len().checked_sub(1) else {
-            self.selected_history = None;
-            self.expanded_history = None;
+        let Some(last) = self.current_tab_mut().completed_turns.len().checked_sub(1) else {
+            self.current_tab_mut().selected_history = None;
+            self.current_tab_mut().expanded_history = None;
             return;
         };
 
-        self.selected_history = Some(last);
-        self.expanded_history = None;
+        self.current_tab_mut().selected_history = Some(last);
+        self.current_tab_mut().expanded_history = None;
         self.scroll_to_bottom();
     }
 
     fn select_previous_history_turn(&mut self) {
-        let Some(selected) = self.selected_history else {
-            self.selected_history = Some(self.completed_turns.len().saturating_sub(1));
+        let Some(selected) = self.current_tab_mut().selected_history else {
+            self.current_tab_mut().selected_history = Some(self.current_tab_mut().completed_turns.len().saturating_sub(1));
             return;
         };
 
         if selected > 0 {
-            self.selected_history = Some(selected - 1);
+            self.current_tab_mut().selected_history = Some(selected - 1);
         }
     }
 
     fn select_next_history_turn(&mut self) {
-        let Some(selected) = self.selected_history else {
-            self.selected_history = Some(self.completed_turns.len().saturating_sub(1));
+        let Some(selected) = self.current_tab_mut().selected_history else {
+            self.current_tab_mut().selected_history = Some(self.current_tab_mut().completed_turns.len().saturating_sub(1));
             return;
         };
 
-        if selected + 1 < self.completed_turns.len() {
-            self.selected_history = Some(selected + 1);
+        if selected + 1 < self.current_tab_mut().completed_turns.len() {
+            self.current_tab_mut().selected_history = Some(selected + 1);
         }
     }
 
     fn toggle_selected_history_turn(&mut self) {
-        let Some(selected) = self.selected_history else {
+        let Some(selected) = self.current_tab_mut().selected_history else {
             return;
         };
 
-        if self.expanded_history == Some(selected) {
-            self.expanded_history = None;
+        if self.current_tab_mut().expanded_history == Some(selected) {
+            self.current_tab_mut().expanded_history = None;
         } else {
-            self.expanded_history = Some(selected);
+            self.current_tab_mut().expanded_history = Some(selected);
         }
     }
 
     fn collapse_selected_history_turn(&mut self) {
-        if self.expanded_history == self.selected_history {
-            self.expanded_history = None;
+        let tab = self.current_tab_mut();
+        if tab.expanded_history == tab.selected_history {
+            tab.expanded_history = None;
         }
     }
 
-    fn selected_recommendation(&self) -> Option<&RecommendationChoice> {
-        self.recommendations
+    fn selected_recommendation_choice(&self) -> Option<&RecommendationChoice> {
+        let tab = self.current_tab();
+        tab.recommendations
             .as_ref()
-            .and_then(|recs| recs.choices.get(self.selected_recommendation))
+            .and_then(|recs| recs.choices.get(tab.selected_recommendation))
     }
 
     /// Returns the number of buttons for the currently selected choice card.
     /// Send actions have 2 buttons (Run, Insert); OpenAndSend has 1 button.
     fn button_count_for_selected(&self) -> usize {
-        self.selected_recommendation()
+        self.selected_recommendation_choice()
             .map(|c| if self.is_send_choice(c) { 2 } else { 1 })
             .unwrap_or(1)
     }
@@ -1894,12 +1924,12 @@ impl App {
     }
 
     fn finalize_agent_response(&mut self) -> FinalizeOutcome {
-        if self.pending_agent_response.trim().is_empty() {
+        if self.current_tab_mut().pending_agent_response.trim().is_empty() {
             self.log_selection_phase("selection_parse_failed", "reason=empty_agent_response");
             return FinalizeOutcome::None;
         }
 
-        let text = std::mem::take(&mut self.pending_agent_response);
+        let text = std::mem::take(&mut self.current_tab_mut().pending_agent_response);
 
         // Autofix responses use a minimal prompt/format; parse them separately.
         if self.autofix_pane_id.is_some() {
@@ -1914,7 +1944,7 @@ impl App {
         }) {
             Ok(recommendations) => {
                 self.stage_completed_turn(text);
-                self.selected_recommendation = recommended_choice_index(&recommendations);
+                self.current_tab_mut().selected_recommendation = recommended_choice_index(&recommendations);
                 self.log_selection_phase(
                     "selection_ready",
                     &format!(
@@ -1923,13 +1953,13 @@ impl App {
                         recommendations.recommended_choice
                     ),
                 );
-                self.recommendations = Some(recommendations);
-                self.selection_visible_pending = true;
+                self.current_tab_mut().recommendations = Some(recommendations);
+                self.current_tab_mut().selection_visible_pending = true;
                 FinalizeOutcome::SelectionReady
             }
             Err(err) => {
                 self.clear_recommendations();
-                self.pending_completed_turn = None;
+                self.current_tab_mut().pending_completed_turn = None;
                 let error_text = format!("{:#}", err).replace('\n', " | ");
                 self.log_selection_phase(
                     "selection_parse_failed",
@@ -1939,14 +1969,14 @@ impl App {
                         error_text
                     ),
                 );
-                if self.current_prompt_text.is_some() {
+                if self.current_tab_mut().current_prompt_text.is_some() {
                     self.stage_completed_turn(text);
                     self.commit_pending_completed_turn();
                     self.clear_chat_history();
                 } else {
-                    self.prompt_in_flight = false;
-                    self.progress_status = None;
-                    self.agent_streaming = false;
+                    self.current_tab_mut().prompt_in_flight = false;
+                    self.current_tab_mut().progress_status = None;
+                    self.current_tab_mut().agent_streaming = false;
                 }
                 FinalizeOutcome::None
             }
@@ -1967,9 +1997,9 @@ impl App {
                 );
                 let preview = Self::armed_fix_preview(&recommendations);
                 self.emit_autofix_state_armed(&pane_id, &preview);
-                self.selected_recommendation = recommended_choice_index(&recommendations);
-                self.recommendations = Some(recommendations);
-                self.selection_visible_pending = true;
+                self.current_tab_mut().selected_recommendation = recommended_choice_index(&recommendations);
+                self.current_tab_mut().recommendations = Some(recommendations);
+                self.current_tab_mut().selection_visible_pending = true;
                 FinalizeOutcome::SelectionReady
             }
             AutofixDecision::Explain { title, explanation } => {
@@ -1987,7 +2017,7 @@ impl App {
                 let turn_prompt = format!("Auto-diagnosed error in pane {pane_id}");
                 let mut details = self.current_turn_details();
                 details.push(ChatMessage::Agent(explanation));
-                self.pending_completed_turn = Some(CompletedTurn {
+                self.current_tab_mut().pending_completed_turn = Some(CompletedTurn {
                     prompt: turn_prompt,
                     details,
                 });
@@ -1995,7 +2025,7 @@ impl App {
                 // Auto-expand: the diagnosis is the whole point of this turn,
                 // and the user shouldn't have to guess that the prompt header
                 // is collapsible to reveal it.
-                self.expanded_history = self.selected_history;
+                self.current_tab_mut().expanded_history = self.current_tab_mut().selected_history;
 
                 self.emit_autofix_state_suggested(&pane_id, &title);
 
@@ -2005,9 +2035,9 @@ impl App {
                 self.suggested_pane_id = Some(pane_id.clone());
                 self.autofix_pane_id = None;
                 self.clear_recommendations();
-                self.prompt_in_flight = false;
-                self.progress_status = None;
-                self.agent_streaming = false;
+                self.current_tab_mut().prompt_in_flight = false;
+                self.current_tab_mut().progress_status = None;
+                self.current_tab_mut().agent_streaming = false;
                 FinalizeOutcome::None
             }
             AutofixDecision::Ignore => {
@@ -2015,38 +2045,38 @@ impl App {
                 self.autofix_pane_id = None;
                 self.clear_recommendations();
                 self.emit_autofix_state_cleared(&pane_id);
-                self.prompt_in_flight = false;
-                self.progress_status = None;
-                self.agent_streaming = false;
+                self.current_tab_mut().prompt_in_flight = false;
+                self.current_tab_mut().progress_status = None;
+                self.current_tab_mut().agent_streaming = false;
                 FinalizeOutcome::None
             }
         }
     }
 
     fn log_selection_phase(&self, phase: &str, details: &str) {
-        if let (Some(prompt_id), Some(submitted_at_unix_s)) = (
-            self.current_prompt_id,
-            self.current_prompt_submitted_at_unix_s,
-        ) {
+        let tab = self.current_tab();
+        if let (Some(prompt_id), Some(submitted_at_unix_s)) =
+            (tab.current_prompt_id, tab.current_prompt_submitted_at_unix_s)
+        {
             prompt_timing_log(prompt_id, submitted_at_unix_s, phase, details);
         }
     }
 
     fn log_selection_visible_if_needed(&mut self) {
-        if !self.selection_visible_pending || self.recommendations.is_none() {
+        if !self.current_tab_mut().selection_visible_pending || self.current_tab_mut().recommendations.is_none() {
             return;
         }
 
         let details = format!(
             "choice_count={} selected_index={}",
-            self.recommendations
+            self.current_tab_mut().recommendations
                 .as_ref()
                 .map(|set| set.choices.len())
                 .unwrap_or(0),
-            self.selected_recommendation
+            self.current_tab_mut().selected_recommendation
         );
         self.log_selection_phase("selection_visible", &details);
-        self.selection_visible_pending = false;
+        self.current_tab_mut().selection_visible_pending = false;
     }
 }
 
@@ -2541,7 +2571,7 @@ mod tests {
         assert_eq!(app.wt_notifications.len(), 1);
         assert_eq!(app.wt_notifications[0].severity, WtEventSeverity::Critical);
         // Should have an Error message in chat
-        assert!(app.messages.iter().any(|m| matches!(m, ChatMessage::Error(_))));
+        assert!(app.current_tab().messages.iter().any(|m| matches!(m, ChatMessage::Error(_))));
     }
 
     #[test]
@@ -2553,7 +2583,7 @@ mod tests {
             params: json!({"pane_id": "5", "state": "closed"}),
         });
         assert!(app.show_notification_banner);
-        assert!(app.messages.iter().any(|m| matches!(m, ChatMessage::System(_))));
+        assert!(app.current_tab().messages.iter().any(|m| matches!(m, ChatMessage::System(_))));
     }
 
     #[test]
@@ -2565,7 +2595,7 @@ mod tests {
             params: json!({"pane_id": "1", "state": "connected"}),
         });
         assert!(!app.show_notification_banner);
-        assert!(app.messages.is_empty());
+        assert!(app.current_tab().messages.is_empty());
         assert_eq!(app.wt_notifications.len(), 1);
     }
 
@@ -2581,7 +2611,7 @@ mod tests {
         // Events from our own pane should be completely ignored
         assert!(!app.show_notification_banner);
         assert!(app.wt_notifications.is_empty());
-        assert!(app.messages.is_empty());
+        assert!(app.current_tab().messages.is_empty());
     }
 
     #[test]
@@ -2732,6 +2762,6 @@ mod tests {
         // Banner should show (due to critical + actionable)
         assert!(app.show_notification_banner);
         // Chat should have 2 messages (critical error + actionable system msg)
-        assert_eq!(app.messages.len(), 2);
+        assert_eq!(app.current_tab().messages.len(), 2);
     }
 }
