@@ -402,6 +402,18 @@ pub struct TabSession {
     pub current_prompt_text: Option<String>,
     pub pending_completed_turn: Option<CompletedTurn>,
 
+    // Input editor state — per-tab so each tab keeps its own draft text,
+    // cursor, and slash-command popup across switches.
+    pub input: String,
+    pub cursor_pos: usize,
+    /// Recomputed on every input mutation. Empty when not in
+    /// command-prefix mode. The popup renderer treats an empty Vec as
+    /// "do not render".
+    pub command_popup_candidates: Vec<&'static CommandSpec>,
+    /// Index into [`Self::command_popup_candidates`]. Clamped on every
+    /// mutation that could shrink the list.
+    pub command_popup_selected: usize,
+
     // Filled in Milestone 2 once each tab has its own ACP SessionId.
     #[allow(dead_code)]
     pub session_id: Option<String>,
@@ -487,6 +499,125 @@ impl TabSession {
         self.completed_turns.push(turn);
         self.scroll_to_bottom();
     }
+
+    pub fn clear_input(&mut self) {
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.refresh_command_popup();
+    }
+
+    pub fn insert_input_char(&mut self, ch: char) {
+        self.cursor_pos = clamp_cursor_to_boundary(&self.input, self.cursor_pos);
+        self.input.insert(self.cursor_pos, ch);
+        self.cursor_pos += ch.len_utf8();
+        self.refresh_command_popup();
+    }
+
+    pub fn delete_before_cursor(&mut self) {
+        self.cursor_pos = clamp_cursor_to_boundary(&self.input, self.cursor_pos);
+        if self.cursor_pos == 0 {
+            return;
+        }
+
+        let previous = prev_char_boundary(&self.input, self.cursor_pos);
+        self.input.replace_range(previous..self.cursor_pos, "");
+        self.cursor_pos = previous;
+        self.refresh_command_popup();
+    }
+
+    pub fn delete_at_cursor(&mut self) {
+        self.cursor_pos = clamp_cursor_to_boundary(&self.input, self.cursor_pos);
+        if self.cursor_pos >= self.input.len() {
+            return;
+        }
+
+        let next = next_char_boundary(&self.input, self.cursor_pos);
+        self.input.replace_range(self.cursor_pos..next, "");
+        self.refresh_command_popup();
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        self.cursor_pos = prev_char_boundary(&self.input, self.cursor_pos);
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        self.cursor_pos = next_char_boundary(&self.input, self.cursor_pos);
+    }
+
+    pub fn move_cursor_word_left(&mut self) {
+        self.cursor_pos = prev_word_boundary(&self.input, self.cursor_pos);
+    }
+
+    pub fn move_cursor_word_right(&mut self) {
+        self.cursor_pos = next_word_boundary(&self.input, self.cursor_pos);
+    }
+
+    pub fn move_cursor_home(&mut self) {
+        self.cursor_pos = 0;
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        self.cursor_pos = self.input.len();
+    }
+
+    /// Recompute the slash-command popup candidates from the current
+    /// input. Called after every input mutation. Clamps the selected
+    /// index so it stays valid when the candidate list shrinks.
+    pub fn refresh_command_popup(&mut self) {
+        if commands::is_command_prefix(&self.input) {
+            // Strip leading whitespace + the `/` to get the user's
+            // partial name. `is_command_prefix` already guarantees the
+            // shape, so the unwrap is safe.
+            let trimmed = self.input.trim_start();
+            let name = trimmed.strip_prefix('/').unwrap_or("");
+            self.command_popup_candidates = commands::matches(name);
+        } else {
+            self.command_popup_candidates.clear();
+        }
+        if self.command_popup_candidates.is_empty() {
+            self.command_popup_selected = 0;
+        } else if self.command_popup_selected >= self.command_popup_candidates.len() {
+            self.command_popup_selected = self.command_popup_candidates.len() - 1;
+        }
+    }
+
+    pub fn command_popup_visible(&self) -> bool {
+        !self.command_popup_candidates.is_empty()
+    }
+
+    pub fn command_popup_up(&mut self) {
+        if self.command_popup_selected > 0 {
+            self.command_popup_selected -= 1;
+        }
+    }
+
+    pub fn command_popup_down(&mut self) {
+        if self.command_popup_selected + 1 < self.command_popup_candidates.len() {
+            self.command_popup_selected += 1;
+        }
+    }
+
+    pub fn selected_command_spec(&self) -> Option<&'static CommandSpec> {
+        self.command_popup_candidates
+            .get(self.command_popup_selected)
+            .copied()
+    }
+
+    /// Tab-completion: replace the input buffer with `/<name> ` (with a
+    /// trailing space if the command takes args, otherwise just the
+    /// name) and reset the cursor to the end. Triggered by Tab when the
+    /// popup is visible.
+    pub fn accept_command_popup_completion(&mut self) {
+        if let Some(spec) = self.selected_command_spec() {
+            self.input = if spec.takes_args {
+                format!("/{} ", spec.name)
+            } else {
+                format!("/{}", spec.name)
+            };
+            self.cursor_pos = self.input.len();
+            self.refresh_command_popup();
+        }
+    }
 }
 
 // --- App ---
@@ -505,8 +636,6 @@ pub struct App {
     pub session_id: String,
     #[allow(dead_code)]
     pub wt_connected: bool,
-    pub input: String,
-    pub cursor_pos: usize,
     pub terminal_rows: u16,
     pub terminal_cols: u16,
     pub should_quit: bool,
@@ -517,15 +646,11 @@ pub struct App {
     new_session_tx: mpsc::UnboundedSender<NewSessionForTab>,
     restart_tx: mpsc::UnboundedSender<RestartRequest>,
     debug_capture_enabled: Arc<AtomicBool>,
-    // Slash-command UI state.
+    // Slash-command UI state. The /help overlay is global — it covers
+    // the chat area regardless of which tab is active. Per-tab popup
+    // state (the command-completion candidates as the user types `/he…`)
+    // lives on `TabSession`.
     pub help_overlay_visible: bool,
-    /// Recomputed on every input mutation. Empty when not in
-    /// command-prefix mode. The popup renderer treats an empty Vec as
-    /// "do not render".
-    command_popup_candidates: Vec<&'static CommandSpec>,
-    /// Index into [`Self::command_popup_candidates`]. Clamped on every
-    /// mutation that could shrink the list.
-    command_popup_selected: usize,
     // Debug panel
     pub debug_messages: Vec<DebugMessage>,
     pub show_debug_panel: bool,
@@ -589,8 +714,6 @@ impl App {
             prompt_name: None,
             session_id: String::new(),
             wt_connected,
-            input: String::new(),
-            cursor_pos: 0,
             terminal_rows: 24,
             terminal_cols: 80,
             should_quit: false,
@@ -602,8 +725,6 @@ impl App {
             restart_tx,
             debug_capture_enabled,
             help_overlay_visible: false,
-            command_popup_candidates: Vec::new(),
-            command_popup_selected: 0,
             debug_messages: Vec::new(),
             show_debug_panel: false,
             debug_scroll: 0,
@@ -882,7 +1003,7 @@ impl App {
             self.state,
             tab.messages.len(),
             tab.completed_turns.len(),
-            self.input.chars().count(),
+            tab.input.chars().count(),
             tab.pending_thought_response.chars().count(),
             tab.pending_agent_response.chars().count(),
             tab.scroll_offset,
@@ -1399,14 +1520,14 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Up if self.input.is_empty() && self.current_tab_mut().recommendations.is_some() => {
+            KeyCode::Up if self.current_tab().input.is_empty() && self.current_tab_mut().recommendations.is_some() => {
                 if self.current_tab_mut().selected_recommendation > 0 {
                     self.current_tab_mut().selected_recommendation -= 1;
                     self.current_tab_mut().selected_button = self.default_button_for_selected();
                     self.scroll_rec_to_selected();
                 }
             }
-            KeyCode::Down if self.input.is_empty() && self.current_tab().recommendations.is_some() => {
+            KeyCode::Down if self.current_tab().input.is_empty() && self.current_tab().recommendations.is_some() => {
                 let choices_len = self
                     .current_tab()
                     .recommendations
@@ -1421,7 +1542,7 @@ impl App {
                 }
             }
             KeyCode::Right | KeyCode::Tab
-                if self.input.is_empty() && self.current_tab_mut().recommendations.is_some() =>
+                if self.current_tab().input.is_empty() && self.current_tab_mut().recommendations.is_some() =>
             {
                 // Cycle button focus forward within the selected card.
                 // Send: 0=Run, 1=Insert. OpenAndSend has only index 0.
@@ -1431,7 +1552,7 @@ impl App {
                 }
             }
             KeyCode::Left
-                if self.input.is_empty() && self.current_tab_mut().recommendations.is_some() =>
+                if self.current_tab().input.is_empty() && self.current_tab_mut().recommendations.is_some() =>
             {
                 // Cycle button focus backward.
                 let button_count = self.button_count_for_selected();
@@ -1526,50 +1647,38 @@ impl App {
                 self.emit_autofix_state_cleared(&pane);
             }
             KeyCode::Esc => {
-                self.input.clear();
-                self.cursor_pos = 0;
-                self.refresh_command_popup();
+                self.current_tab_mut().clear_input();
             }
             KeyCode::Up if self.command_popup_visible() => {
-                if self.command_popup_selected > 0 {
-                    self.command_popup_selected -= 1;
-                }
+                self.current_tab_mut().command_popup_up();
             }
             KeyCode::Down if self.command_popup_visible() => {
-                if self.command_popup_selected + 1 < self.command_popup_candidates.len() {
-                    self.command_popup_selected += 1;
-                }
+                self.current_tab_mut().command_popup_down();
             }
             KeyCode::Tab if self.command_popup_visible() => {
-                self.accept_command_popup_completion();
+                self.current_tab_mut().accept_command_popup_completion();
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.insert_input_char('\n');
+                self.current_tab_mut().insert_input_char('\n');
             }
             KeyCode::Enter if self.command_popup_visible() => {
                 // Popup is showing — Enter runs the highlighted command
                 // (/, /h, /he etc. → /help) instead of committing the
                 // raw text as a prompt. Esc dismisses if the user
                 // doesn't want any command.
-                if let Some(spec) = self
-                    .command_popup_candidates
-                    .get(self.command_popup_selected)
-                    .copied()
-                {
+                if let Some(spec) = self.current_tab().selected_command_spec() {
                     let parsed = ParsedCommand {
                         kind: spec.kind,
                         spec,
                         rest: String::new(),
                     };
-                    self.input.clear();
-                    self.cursor_pos = 0;
-                    self.refresh_command_popup();
+                    self.current_tab_mut().clear_input();
                     self.handle_slash_command(parsed);
                 }
             }
             KeyCode::Enter => {
                 let _tab = self.current_tab();
-                tracing::debug!(target: "autofix", input_empty = self.input.is_empty(), state = ?self.state, has_recs = _tab.recommendations.is_some(), autofix_pane = ?self.autofix_pane_id, selected_idx = _tab.selected_recommendation, "Enter");
+                tracing::debug!(target: "autofix", input_empty = _tab.input.is_empty(), state = ?self.state, has_recs = _tab.recommendations.is_some(), autofix_pane = ?self.autofix_pane_id, selected_idx = _tab.selected_recommendation, "Enter");
                 // Slash-command intercept. Runs before the prompt path so
                 // commands like /stop work even mid-flight, and /help / /clear
                 // / /exit work even when the agent isn't Connected.
@@ -1577,20 +1686,19 @@ impl App {
                 // `//literal` falls through to the prompt path (parse() returns
                 // None), and the leading `/` is left intact — the agent sees
                 // exactly what the user typed.
-                if !self.input.is_empty() {
-                    if let Some(cmd) = commands::parse(&self.input) {
-                        self.input.clear();
-                        self.cursor_pos = 0;
-                        self.refresh_command_popup();
+                if !self.current_tab().input.is_empty() {
+                    if let Some(cmd) = commands::parse(&self.current_tab().input) {
+                        self.current_tab_mut().clear_input();
                         self.handle_slash_command(cmd);
                         return;
-                    } else if self.input.trim_start().starts_with('/')
-                        && !self.input.trim_start().starts_with("//")
+                    } else if self.current_tab().input.trim_start().starts_with('/')
+                        && !self.current_tab().input.trim_start().starts_with("//")
                     {
                         // Looks like an attempted command but the name isn't
                         // registered: warn the user but still send the line as
                         // a prompt so they don't lose what they typed.
                         let unknown = self
+                            .current_tab()
                             .input
                             .trim_start()
                             .split_whitespace()
@@ -1605,7 +1713,7 @@ impl App {
                         // Fall through to the prompt path below.
                     }
                 }
-                if self.input.is_empty()
+                if self.current_tab().input.is_empty()
                     && self.state == ConnectionState::Connected
                     && self.current_tab_mut().recommendations.is_some()
                 {
@@ -1642,7 +1750,7 @@ impl App {
                             self.emit_autofix_state_cleared(&pane_id);
                         }
                     }
-                } else if !self.input.is_empty() && self.state == ConnectionState::Connected {
+                } else if !self.current_tab().input.is_empty() && self.state == ConnectionState::Connected {
                     // Same-tab single-flight: refuse a new prompt if this
                     // tab is still streaming the previous one. The ACP
                     // client enforces this server-side too, but bouncing
@@ -1657,14 +1765,14 @@ impl App {
                         tab.scroll_to_bottom();
                         return;
                     }
-                    let text = self.input.clone();
-                    self.input.clear();
-                    self.cursor_pos = 0;
                     // The Enter handler always operates on the active tab —
                     // the user is by definition on the tab they're typing
                     // in. Routing of subsequent ACP events back into this
                     // tab is keyed on the SessionId attached to it.
                     let tab = self.current_tab_mut();
+                    let text = std::mem::take(&mut tab.input);
+                    tab.cursor_pos = 0;
+                    tab.refresh_command_popup();
                     tab.prepare_for_new_prompt(&text);
                     tab.messages.push(ChatMessage::User(text.clone()));
                     tab.scroll_to_bottom();
@@ -1690,28 +1798,28 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                self.delete_before_cursor();
+                self.current_tab_mut().delete_before_cursor();
             }
             KeyCode::Delete => {
-                self.delete_at_cursor();
+                self.current_tab_mut().delete_at_cursor();
             }
             KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.move_cursor_word_left();
+                self.current_tab_mut().move_cursor_word_left();
             }
             KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.move_cursor_word_right();
+                self.current_tab_mut().move_cursor_word_right();
             }
             KeyCode::Left => {
-                self.move_cursor_left();
+                self.current_tab_mut().move_cursor_left();
             }
             KeyCode::Right => {
-                self.move_cursor_right();
+                self.current_tab_mut().move_cursor_right();
             }
             KeyCode::Home => {
-                self.cursor_pos = 0;
+                self.current_tab_mut().move_cursor_home();
             }
             KeyCode::End => {
-                self.cursor_pos = self.input.len();
+                self.current_tab_mut().move_cursor_end();
             }
             KeyCode::PageUp => {
                 self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_add(10);
@@ -1720,7 +1828,7 @@ impl App {
                 self.current_tab_mut().scroll_offset = self.current_tab_mut().scroll_offset.saturating_sub(10);
             }
             KeyCode::Char(c) => {
-                self.insert_input_char(c);
+                self.current_tab_mut().insert_input_char(c);
             }
             _ => {}
         }
@@ -1772,92 +1880,22 @@ impl App {
             .map(|n| (n.summary.as_str(), &n.severity))
     }
 
-    fn insert_input_char(&mut self, ch: char) {
-        self.cursor_pos = clamp_cursor_to_boundary(&self.input, self.cursor_pos);
-        self.input.insert(self.cursor_pos, ch);
-        self.cursor_pos += ch.len_utf8();
-        self.refresh_command_popup();
-    }
-
-    fn delete_before_cursor(&mut self) {
-        self.cursor_pos = clamp_cursor_to_boundary(&self.input, self.cursor_pos);
-        if self.cursor_pos == 0 {
-            return;
-        }
-
-        let previous = prev_char_boundary(&self.input, self.cursor_pos);
-        self.input.replace_range(previous..self.cursor_pos, "");
-        self.cursor_pos = previous;
-        self.refresh_command_popup();
-    }
-
-    fn delete_at_cursor(&mut self) {
-        self.cursor_pos = clamp_cursor_to_boundary(&self.input, self.cursor_pos);
-        if self.cursor_pos >= self.input.len() {
-            return;
-        }
-
-        let next = next_char_boundary(&self.input, self.cursor_pos);
-        self.input.replace_range(self.cursor_pos..next, "");
-        self.refresh_command_popup();
-    }
-
-    /// Recompute the slash-command popup candidates from the current
-    /// input. Called after every input mutation. Clamps the selected
-    /// index so it stays valid when the candidate list shrinks.
-    fn refresh_command_popup(&mut self) {
-        if commands::is_command_prefix(&self.input) {
-            // Strip leading whitespace + the `/` to get the user's
-            // partial name. `is_command_prefix` already guarantees the
-            // shape, so the unwrap is safe.
-            let trimmed = self.input.trim_start();
-            let name = trimmed.strip_prefix('/').unwrap_or("");
-            self.command_popup_candidates = commands::matches(name);
-        } else {
-            self.command_popup_candidates.clear();
-        }
-        if self.command_popup_candidates.is_empty() {
-            self.command_popup_selected = 0;
-        } else if self.command_popup_selected >= self.command_popup_candidates.len() {
-            self.command_popup_selected = self.command_popup_candidates.len() - 1;
-        }
-    }
-
     /// Visible popup state for the renderer. Returns `None` when the
-    /// popup should not be drawn this frame.
+    /// popup should not be drawn this frame. Reads from the active tab.
     pub fn command_popup_state(&self) -> Option<crate::ui::PopupState<'_>> {
-        if self.command_popup_candidates.is_empty() {
+        let tab = self.current_tab();
+        if tab.command_popup_candidates.is_empty() {
             None
         } else {
             Some(crate::ui::PopupState {
-                candidates: &self.command_popup_candidates,
-                selected: self.command_popup_selected,
+                candidates: &tab.command_popup_candidates,
+                selected: tab.command_popup_selected,
             })
         }
     }
 
     fn command_popup_visible(&self) -> bool {
-        !self.command_popup_candidates.is_empty()
-    }
-
-    /// Tab-completion: replace the input buffer with `/<name> ` (with a
-    /// trailing space if the command takes args, otherwise just the
-    /// name) and reset the cursor to the end. Triggered by Tab when the
-    /// popup is visible.
-    fn accept_command_popup_completion(&mut self) {
-        if let Some(spec) = self
-            .command_popup_candidates
-            .get(self.command_popup_selected)
-            .copied()
-        {
-            self.input = if spec.takes_args {
-                format!("/{} ", spec.name)
-            } else {
-                format!("/{}", spec.name)
-            };
-            self.cursor_pos = self.input.len();
-            self.refresh_command_popup();
-        }
+        self.current_tab().command_popup_visible()
     }
 
     /// Dispatch a parsed slash-command. The Enter handler is responsible
@@ -1953,22 +1991,6 @@ impl App {
                 self.publish_agent_status();
             }
         }
-    }
-
-    fn move_cursor_left(&mut self) {
-        self.cursor_pos = prev_char_boundary(&self.input, self.cursor_pos);
-    }
-
-    fn move_cursor_right(&mut self) {
-        self.cursor_pos = next_char_boundary(&self.input, self.cursor_pos);
-    }
-
-    fn move_cursor_word_left(&mut self) {
-        self.cursor_pos = prev_word_boundary(&self.input, self.cursor_pos);
-    }
-
-    fn move_cursor_word_right(&mut self) {
-        self.cursor_pos = next_word_boundary(&self.input, self.cursor_pos);
     }
 
     /// Height of the recommendations panel — grows to fit content, capped at 40% of pane height.

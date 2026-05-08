@@ -21,7 +21,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     } else {
         Constraint::Length(0)
     };
-    let input_height = input::input_height(&app.input, app.cursor_pos, main_area.width);
+    let input_height = {
+        let tab = app.current_tab();
+        input::input_height(&tab.input, tab.cursor_pos, main_area.width)
+    };
 
     // The host (Windows Terminal) renders the agent bar in XAML above this
     // pane, so wta uses the full pane area for chat / recommendations / input.
@@ -83,7 +86,10 @@ pub fn input_cursor_position(app: &App, area: Rect) -> Option<Position> {
     } else {
         Constraint::Length(0)
     };
-    let input_height = input::input_height(&app.input, app.cursor_pos, main_area.width);
+    let input_height = {
+        let tab = app.current_tab();
+        input::input_height(&tab.input, tab.cursor_pos, main_area.width)
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
