@@ -22,18 +22,6 @@ pub struct TerminalOutput {
     pub exit_status: Option<u32>,
 }
 
-/// Snapshot of the active Windows Terminal pane plus its recent visible content.
-pub struct ActivePaneSnapshot {
-    pub window_id: String,
-    pub tab_id: String,
-    pub pane_id: String,
-    pub title: Option<String>,
-    pub profile: Option<String>,
-    pub content: Option<String>,
-    pub line_count: Option<u64>,
-    pub truncated: bool,
-}
-
 /// A local subprocess terminal.
 struct LocalTerminal {
     child: Mutex<Child>,
@@ -65,14 +53,6 @@ pub struct ShellManager {
 }
 
 impl ShellManager {
-    fn value_to_string(value: Option<&serde_json::Value>) -> Option<String> {
-        match value {
-            Some(serde_json::Value::String(s)) => Some(s.clone()),
-            Some(serde_json::Value::Number(n)) => Some(n.to_string()),
-            _ => None,
-        }
-    }
-
     pub fn new() -> Self {
         Self {
             terminals: Mutex::new(HashMap::new()),
@@ -395,38 +375,29 @@ impl ShellManager {
             }
         };
 
-        let wt = self.wt()?;
+        // Delegate to `wtcli wait-for`: one subprocess holds an open COM
+        // channel and polls internally, instead of re-spawning wtcli per tick
+        // through CliChannel.
+        let wtcli = super::wt_channel::resolve_wtcli_path();
+        let output = Command::new(&wtcli)
+            .args(["--json", "wait-for", "-t", &pane_id, "--timeout", "0"])
+            .output()
+            .await?;
 
-        // Poll process status until we get an exit code
-        loop {
-            let result = wt
-                .request(
-                    "get_process_status",
-                    serde_json::json!({ "pane_id": pane_id }),
-                )
-                .await?;
-
-            if let Some(code) = result.get("exit_code").and_then(|v| v.as_u64()) {
-                return Ok(code as u32);
-            }
-
-            // Check if the process is still running
-            let is_running = result
-                .get("state")
-                .and_then(|v| v.as_str())
-                .map(|s| s == "running")
-                .unwrap_or(true);
-
-            if !is_running {
-                // Process exited but no exit code available
-                return Ok(result
-                    .get("exit_code")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32);
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("wtcli wait-for failed: {}", stderr.trim()));
         }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let val: serde_json::Value = serde_json::from_str(stdout.trim())
+            .map_err(|e| anyhow::anyhow!("Failed to parse wtcli wait-for output: {}", e))?;
+        let code = val
+            .get("exit_code")
+            .and_then(|v| v.as_i64())
+            .map(|n| n.max(0) as u32)
+            .unwrap_or(0);
+        Ok(code)
     }
 
     async fn wait_for_exit_local(&self, terminal_id: &str) -> anyhow::Result<u32> {
@@ -622,13 +593,6 @@ impl ShellManager {
         self.wt()?.request("read_pane_output", params).await
     }
 
-    /// Close a pane.
-    pub async fn wt_close_pane(&self, pane_id: &str) -> anyhow::Result<serde_json::Value> {
-        self.wt()?
-            .request("close_pane", serde_json::json!({ "pane_id": pane_id }))
-            .await
-    }
-
     /// Switch focus to a pane (switching tab if needed).
     pub async fn wt_focus_pane(&self, pane_id: &str) -> anyhow::Result<serde_json::Value> {
         self.wt()?
@@ -636,87 +600,10 @@ impl ShellManager {
             .await
     }
 
-    /// Get process status for a pane.
-    pub async fn wt_get_process_status(&self, pane_id: &str) -> anyhow::Result<serde_json::Value> {
-        self.wt()?
-            .request(
-                "get_process_status",
-                serde_json::json!({ "pane_id": pane_id }),
-            )
-            .await
-    }
-
     /// Get the active pane info.
     pub async fn wt_get_active_pane(&self) -> anyhow::Result<serde_json::Value> {
         self.wt()?
             .request("get_active_pane", serde_json::json!({}))
-            .await
-    }
-
-    /// Capture the current active pane and a snapshot of its recent output.
-    pub async fn wt_active_pane_snapshot(
-        &self,
-        max_lines: Option<u32>,
-    ) -> anyhow::Result<ActivePaneSnapshot> {
-        let active = self.wt_get_active_pane().await?;
-        let pane_id = Self::value_to_string(active.get("pane_id"))
-            .ok_or_else(|| anyhow::anyhow!("active pane response missing pane_id"))?;
-        let tab_id = Self::value_to_string(active.get("tab_id"))
-            .ok_or_else(|| anyhow::anyhow!("active pane response missing tab_id"))?;
-        let window_id = Self::value_to_string(active.get("window_id"))
-            .ok_or_else(|| anyhow::anyhow!("active pane response missing window_id"))?;
-
-        let output = self.wt_read_pane_output(&pane_id, max_lines).await.ok();
-
-        Ok(ActivePaneSnapshot {
-            window_id,
-            tab_id,
-            pane_id,
-            title: active
-                .get("title")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            profile: active
-                .get("profile")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            content: output
-                .as_ref()
-                .and_then(|val| val.get("content"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            line_count: output
-                .as_ref()
-                .and_then(|val| val.get("line_count"))
-                .and_then(|v| v.as_u64()),
-            truncated: output
-                .as_ref()
-                .and_then(|val| val.get("truncated"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
-        })
-    }
-
-    /// Show a quick-pick dialog in WT and return the user's selection.
-    pub async fn wt_quick_pick(
-        &self,
-        title: &str,
-        choices: &[String],
-        allow_free_input: bool,
-    ) -> anyhow::Result<serde_json::Value> {
-        let choices_json: Vec<serde_json::Value> = choices
-            .iter()
-            .map(|c| serde_json::Value::String(c.clone()))
-            .collect();
-        self.wt()?
-            .request(
-                "quick_pick",
-                serde_json::json!({
-                    "title": title,
-                    "choices": choices_json,
-                    "allow_free_input": allow_free_input,
-                }),
-            )
             .await
     }
 }

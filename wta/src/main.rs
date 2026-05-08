@@ -205,7 +205,7 @@ enum Command {
         target: Option<String>,
     },
 
-    /// Wait for a pane's process to exit (poll get_process_status)
+    /// Wait for a pane's process to exit (delegates to `wtcli wait-for`)
     WaitFor {
         /// Target pane ID
         #[arg(short = 't', long)]
