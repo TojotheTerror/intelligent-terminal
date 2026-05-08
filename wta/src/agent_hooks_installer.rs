@@ -564,6 +564,24 @@ fn install_for_copilot(home: &Path) {
         }
     };
 
+    // Cleanup (issue #21): pre-staging-refactor wta builds, moved/deleted
+    // worktrees, renamed dev clones, or stale `WTA_HOOKS_BUNDLE_DIR` values
+    // can all leave an `extraKnownMarketplaces["wt-local"]` entry whose
+    // `source.path` no longer matches the bundle we resolved this run.
+    // `copilot plugin marketplace add` is silently a no-op when the entry
+    // already exists, so without this cleanup the stale path persists
+    // forever and the new bundle never registers. Rewrite the path field
+    // in place; Copilot's loader uses whatever string lives there.
+    let settings_path = copilot_dir.join("settings.json");
+    if let Err(e) = cleanup_stale_copilot_marketplace(&settings_path, &bundle_dir) {
+        tracing::warn!(
+            target: "copilot_hooks",
+            err = %e,
+            path = %settings_path.display(),
+            "failed to clean up stale wt-local marketplace entry; non-fatal",
+        );
+    }
+
     let bundle_path = bundle_dir.to_string_lossy().into_owned();
     // copilot plugin marketplace add exits 1 with stderr "Marketplace
     // \"wt-local\" already registered" when re-run — match that
@@ -1632,6 +1650,151 @@ fn entry_is_wta_tagged(entry: &Value) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Copilot stale-marketplace cleanup (issue #21)
+// ---------------------------------------------------------------------------
+
+/// Rewrite a stale `extraKnownMarketplaces["wt-local"].source.path` in
+/// `~/.copilot/settings.json` so it points at the bundle we resolved on
+/// this run. Idempotent and best-effort: no-op when the file is missing,
+/// the entry is absent, the path already matches, or the JSON is
+/// malformed.
+///
+/// Why this exists
+/// ===============
+///
+/// `copilot plugin marketplace add wt-local <path>` is silently a no-op
+/// when an entry named `wt-local` already exists; it does **not**
+/// overwrite the `path` field. So if any earlier wta build (or a
+/// since-deleted worktree, or a stale `WTA_HOOKS_BUNDLE_DIR`) registered
+/// `wt-local` with a now-wrong path, every subsequent `wta install-hooks`
+/// will leave the stale path in place and the new bundle never takes
+/// effect. This function detects the mismatch and rewrites the path in
+/// place. Copilot's loader uses whatever string lives in `source.path`
+/// (per the issue #21 verification), so an in-place rewrite is enough —
+/// no need to spawn `copilot plugin uninstall` + `marketplace remove`.
+///
+/// Scope (issue #21 broadened scope from the verification comment)
+/// ----------------------------------------------------------------
+///
+/// We touch only entries whose `source.source == "directory"` (the local
+/// bundle case). GitHub-source entries and non-`wt-local` user-managed
+/// marketplaces are left alone unconditionally.
+///
+/// Concrete `~/.copilot/settings.json` shape we care about:
+/// ```jsonc
+/// {
+///   "extraKnownMarketplaces": {
+///     "wt-local": {
+///       "source": {
+///         "source": "directory",
+///         "path": "C:\\old\\stale\\path\\copilot"
+///       }
+///     }
+///   }
+/// }
+/// ```
+fn cleanup_stale_copilot_marketplace(
+    settings_path: &Path,
+    expected_source: &Path,
+) -> std::io::Result<()> {
+    let text = match fs::read_to_string(settings_path) {
+        Ok(t) if !t.trim().is_empty() => t,
+        Ok(_) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
+    let mut settings: Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target: "copilot_hooks",
+                err = %e,
+                path = %settings_path.display(),
+                "settings.json malformed; leaving untouched",
+            );
+            return Ok(());
+        }
+    };
+
+    let expected_str = expected_source.to_string_lossy().into_owned();
+    let old_path: String;
+
+    {
+        let Some(root) = settings.as_object_mut() else {
+            return Ok(());
+        };
+        let Some(extra) = root
+            .get_mut("extraKnownMarketplaces")
+            .and_then(|v| v.as_object_mut())
+        else {
+            return Ok(());
+        };
+        let Some(entry) = extra
+            .get_mut(MARKETPLACE_NAME)
+            .and_then(|v| v.as_object_mut())
+        else {
+            return Ok(());
+        };
+        let Some(source) = entry.get_mut("source").and_then(|v| v.as_object_mut()) else {
+            return Ok(());
+        };
+
+        // Only rewrite local-directory entries; never touch a user-managed
+        // GitHub-sourced wt-local override.
+        if source.get("source").and_then(|v| v.as_str()) != Some("directory") {
+            return Ok(());
+        }
+
+        let current = source
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if paths_equivalent(Path::new(&current), expected_source) {
+            return Ok(());
+        }
+
+        source.insert("path".to_string(), Value::String(expected_str.clone()));
+        old_path = current;
+    }
+
+    let serialized = serde_json::to_string_pretty(&settings)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    fs::write(settings_path, serialized)?;
+    tracing::info!(
+        target: "copilot_hooks",
+        path = %settings_path.display(),
+        old = %old_path,
+        new = %expected_str,
+        "rewrote stale wt-local marketplace path",
+    );
+    Ok(())
+}
+
+/// Compare two filesystem paths for equivalence. Trailing path
+/// separators are normalized away and on Windows the comparison is
+/// case-insensitive (ASCII-fold; matches typical NTFS semantics for the
+/// kinds of paths we deal with — drive letters, ASCII directory names).
+/// We avoid `canonicalize` because the stale path may no longer exist
+/// on disk, which is precisely the case we want to detect and rewrite.
+fn paths_equivalent(a: &Path, b: &Path) -> bool {
+    fn normalize(p: &Path) -> Vec<String> {
+        p.components()
+            .map(|c| {
+                let s = c.as_os_str().to_string_lossy().into_owned();
+                if cfg!(windows) {
+                    s.to_ascii_lowercase()
+                } else {
+                    s
+                }
+            })
+            .collect()
+    }
+    normalize(a) == normalize(b)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1936,6 +2099,211 @@ mod tests {
         cleanup_legacy_claude_hooks(&path).unwrap();
         let after = fs::read_to_string(&path).unwrap();
         assert_eq!(after, "{ this is not valid json");
+    }
+
+    // ---- cleanup_stale_copilot_marketplace (#21) ------------------------
+    //
+    // Real settings.json shape we rewrite (only `extraKnownMarketplaces`
+    // shown for brevity):
+    //
+    //   "extraKnownMarketplaces": {
+    //     "wt-local": {
+    //       "source": {
+    //         "source": "directory",
+    //         "path": "C:\\some\\path\\copilot"
+    //       }
+    //     }
+    //   }
+
+    fn copilot_settings_with(market: Value) -> Value {
+        serde_json::json!({
+            "askedSetupTerminals": ["windows-terminal"],
+            "extraKnownMarketplaces": market,
+            "model": "sonnet"
+        })
+    }
+
+    #[test]
+    fn cleanup_stale_copilot_marketplace_noop_when_file_missing() {
+        let dir = unique_dir("copilot-cleanup-missing");
+        let path = dir.join("settings.json");
+        let expected = PathBuf::from("C:\\new\\bundle\\copilot");
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn cleanup_stale_copilot_marketplace_noop_when_no_entry() {
+        let dir = unique_dir("copilot-cleanup-no-entry");
+        let path = dir.join("settings.json");
+        let before = serde_json::json!({
+            "extraKnownMarketplaces": {
+                "superpowers-marketplace": {
+                    "source": { "source": "github", "repo": "obra/superpowers-marketplace" }
+                }
+            }
+        });
+        let serialized = serde_json::to_string_pretty(&before).unwrap();
+        fs::write(&path, &serialized).unwrap();
+
+        let expected = PathBuf::from("C:\\new\\bundle\\copilot");
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+
+        // File should not have been rewritten (content identical).
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(after, serialized);
+    }
+
+    /// Round-7 legacy case: stale path is the install destination itself
+    /// (`~/.copilot/installed-plugins/wt-local/`). Rewrite must point at
+    /// the new bundle source.
+    #[test]
+    fn cleanup_stale_copilot_marketplace_rewrites_install_destination() {
+        let dir = unique_dir("copilot-cleanup-install-dest");
+        let path = dir.join("settings.json");
+        let before = copilot_settings_with(serde_json::json!({
+            "wt-local": {
+                "source": {
+                    "source": "directory",
+                    "path": "C:\\Users\\u\\.copilot\\installed-plugins\\wt-local"
+                }
+            }
+        }));
+        fs::write(&path, serde_json::to_string_pretty(&before).unwrap()).unwrap();
+
+        let expected = PathBuf::from("C:\\repo\\wta\\wt-agent-hooks\\copilot");
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+
+        let after: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let new_path = after
+            .pointer("/extraKnownMarketplaces/wt-local/source/path")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert_eq!(new_path, "C:\\repo\\wta\\wt-agent-hooks\\copilot");
+        // Untouched siblings preserved.
+        assert_eq!(after.get("model").and_then(|v| v.as_str()), Some("sonnet"));
+    }
+
+    /// Verifier's reproduction scenario: stale path is a sibling worktree
+    /// directory that was deleted between runs.
+    #[test]
+    fn cleanup_stale_copilot_marketplace_rewrites_sibling_worktree_path() {
+        let dir = unique_dir("copilot-cleanup-sibling");
+        let path = dir.join("settings.json");
+        let before = copilot_settings_with(serde_json::json!({
+            "wt-local": {
+                "source": {
+                    "source": "directory",
+                    "path": "C:\\repo\\.worktree\\track-static-bundle\\wta\\wt-agent-hooks\\copilot"
+                }
+            }
+        }));
+        fs::write(&path, serde_json::to_string_pretty(&before).unwrap()).unwrap();
+
+        let expected =
+            PathBuf::from("C:\\repo\\.worktree\\track-copilot-cleanup\\wta\\wt-agent-hooks\\copilot");
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+
+        let after: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let new_path = after
+            .pointer("/extraKnownMarketplaces/wt-local/source/path")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert_eq!(
+            new_path,
+            "C:\\repo\\.worktree\\track-copilot-cleanup\\wta\\wt-agent-hooks\\copilot"
+        );
+    }
+
+    /// User-managed entries (other marketplaces, github-source `wt-local`)
+    /// must be left exactly as-is.
+    #[test]
+    fn cleanup_stale_copilot_marketplace_leaves_user_entries_alone() {
+        let dir = unique_dir("copilot-cleanup-user");
+        let path = dir.join("settings.json");
+
+        // (a) wt-local is a github-source override — must NOT touch.
+        let before_a = copilot_settings_with(serde_json::json!({
+            "wt-local": {
+                "source": { "source": "github", "repo": "someone/wt-local-fork" }
+            },
+            "superpowers-marketplace": {
+                "source": { "source": "github", "repo": "obra/superpowers-marketplace" }
+            }
+        }));
+        let serialized = serde_json::to_string_pretty(&before_a).unwrap();
+        fs::write(&path, &serialized).unwrap();
+
+        let expected = PathBuf::from("C:\\repo\\wta\\wt-agent-hooks\\copilot");
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after, serialized,
+            "github-source wt-local entry must be preserved verbatim"
+        );
+
+        // (b) Only some other marketplace exists (no wt-local at all).
+        let before_b = copilot_settings_with(serde_json::json!({
+            "user-marketplace": {
+                "source": { "source": "directory", "path": "C:\\users-stuff" }
+            }
+        }));
+        let serialized_b = serde_json::to_string_pretty(&before_b).unwrap();
+        fs::write(&path, &serialized_b).unwrap();
+
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+        let after_b = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after_b, serialized_b,
+            "non-wt-local directory entries must be preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn cleanup_stale_copilot_marketplace_idempotent_when_path_matches() {
+        let dir = unique_dir("copilot-cleanup-match");
+        let path = dir.join("settings.json");
+
+        let expected = PathBuf::from("C:\\repo\\wta\\wt-agent-hooks\\copilot");
+        let before = copilot_settings_with(serde_json::json!({
+            "wt-local": {
+                "source": {
+                    "source": "directory",
+                    "path": expected.to_string_lossy()
+                }
+            }
+        }));
+        let serialized = serde_json::to_string_pretty(&before).unwrap();
+        fs::write(&path, &serialized).unwrap();
+
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+
+        // File must not have been rewritten (content identical).
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(after, serialized);
+
+        // And on Windows, the comparison is case-insensitive: rewriting
+        // the same path with different case should still be a no-op.
+        if cfg!(windows) {
+            let upper = PathBuf::from("C:\\REPO\\WTA\\WT-AGENT-HOOKS\\COPILOT");
+            cleanup_stale_copilot_marketplace(&path, &upper).unwrap();
+            let after2 = fs::read_to_string(&path).unwrap();
+            assert_eq!(after2, serialized);
+        }
+    }
+
+    #[test]
+    fn cleanup_stale_copilot_marketplace_skips_malformed_json() {
+        let dir = unique_dir("copilot-cleanup-malformed");
+        let path = dir.join("settings.json");
+        fs::write(&path, "{ not valid").unwrap();
+
+        let expected = PathBuf::from("C:\\repo\\wta\\wt-agent-hooks\\copilot");
+        // Must not panic; must not rewrite the file.
+        cleanup_stale_copilot_marketplace(&path, &expected).unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(after, "{ not valid");
     }
 
     // ---- status / uninstall parsers (Track 2) ---------------------------
