@@ -15,7 +15,7 @@ use crate::coordinator::{
     RecommendationSet,
 };
 use crate::pane_context::PaneContext;
-use crate::protocol::acp::client::{prompt_timing_log, PromptSubmission};
+use crate::protocol::acp::client::{prompt_timing_log, CancelRequest, PromptSubmission};
 use crate::ui;
 use crate::ui_trace;
 
@@ -524,6 +524,7 @@ pub struct App {
     prompt_tx: mpsc::UnboundedSender<PromptSubmission>,
     recommendation_tx: mpsc::UnboundedSender<crate::coordinator::ChoiceExecution>,
     permission_tx: mpsc::UnboundedSender<String>,
+    cancel_tx: mpsc::UnboundedSender<CancelRequest>,
     debug_capture_enabled: Arc<AtomicBool>,
     // Debug panel
     pub debug_messages: Vec<DebugMessage>,
@@ -569,6 +570,7 @@ impl App {
         prompt_tx: mpsc::UnboundedSender<PromptSubmission>,
         recommendation_tx: mpsc::UnboundedSender<crate::coordinator::ChoiceExecution>,
         permission_tx: mpsc::UnboundedSender<String>,
+        cancel_tx: mpsc::UnboundedSender<CancelRequest>,
         debug_capture_enabled: Arc<AtomicBool>,
         wt_connected: bool,
         autofix_enabled: bool,
@@ -593,6 +595,7 @@ impl App {
             prompt_tx,
             recommendation_tx,
             permission_tx,
+            cancel_tx,
             debug_capture_enabled,
             debug_messages: Vec::new(),
             show_debug_panel: false,
@@ -1045,7 +1048,12 @@ impl App {
             }
             AppEvent::AgentThoughtChunk { session_id, text } => {
                 let tab = self.session_tab_mut(&session_id);
-                tab.prompt_in_flight = true;
+                // If the user cancelled this prompt (or it already
+                // completed) we drop the late chunk rather than re-arming
+                // the spinner.
+                if !tab.prompt_in_flight {
+                    return;
+                }
                 if tab.progress_status.is_none() {
                     tab.progress_status = Some("Thinking...".to_string());
                 }
@@ -1053,8 +1061,10 @@ impl App {
             }
             AppEvent::AgentMessageChunk { session_id, text } => {
                 let tab = self.session_tab_mut(&session_id);
+                if !tab.prompt_in_flight {
+                    return;
+                }
                 tab.agent_streaming = true;
-                tab.prompt_in_flight = true;
                 tab.progress_status = None;
                 tab.pending_thought_response.clear();
                 tab.pending_agent_response.push_str(&text);
@@ -1111,6 +1121,9 @@ impl App {
             }
             AppEvent::ToolCall { session_id, id, title, status } => {
                 let tab = self.session_tab_mut(&session_id);
+                if !tab.prompt_in_flight {
+                    return;
+                }
                 tab.tool_calls
                     .insert(id.clone(), (title.clone(), status.clone()));
                 tab.messages
@@ -1119,6 +1132,9 @@ impl App {
             }
             AppEvent::ToolCallUpdate { session_id, id, status } => {
                 let tab = self.session_tab_mut(&session_id);
+                if !tab.prompt_in_flight {
+                    return;
+                }
                 if let Some(entry) = tab.tool_calls.get_mut(&id) {
                     entry.1 = status.clone();
                 }
@@ -1138,6 +1154,9 @@ impl App {
             }
             AppEvent::Plan { session_id, entries } => {
                 let tab = self.session_tab_mut(&session_id);
+                if !tab.prompt_in_flight {
+                    return;
+                }
                 tab.messages.push(ChatMessage::Plan(entries));
                 tab.scroll_to_bottom();
             }
@@ -1147,7 +1166,14 @@ impl App {
                 options,
                 responder,
             } => {
-                self.session_tab_mut(&session_id).permission = Some(PermissionState {
+                let tab = self.session_tab_mut(&session_id);
+                if !tab.prompt_in_flight {
+                    // Auto-deny if the user cancelled before the agent
+                    // got around to asking. Dropping the responder yields
+                    // a Cancelled outcome on the agent side.
+                    return;
+                }
+                tab.permission = Some(PermissionState {
                     description,
                     options,
                     selected: 0,
@@ -1432,9 +1458,32 @@ impl App {
                 return;
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.current_tab_mut().agent_streaming {
-                    // TODO: send cancel to agent
-                    self.current_tab_mut().agent_streaming = false;
+                let in_flight = self.current_tab().prompt_in_flight
+                    || self.current_tab().agent_streaming;
+                if in_flight {
+                    // Send a session/cancel to the ACP client. The client
+                    // will fire the protocol notification and signal the
+                    // per-prompt oneshot so the spawned task drops out of
+                    // conn.prompt() immediately.
+                    let session_id = self.current_tab().session_id.clone();
+                    if let Some(sid) = session_id {
+                        let _ = self.cancel_tx.send(CancelRequest { session_id: sid });
+                    }
+                    // Optimistically reset the local UI so the spinner
+                    // stops immediately — don't wait for the agent's
+                    // cancelled-end roundtrip. Late chunks for this prompt
+                    // are dropped by the chunk handlers (they bail on
+                    // !prompt_in_flight).
+                    let tab = self.current_tab_mut();
+                    tab.prompt_in_flight = false;
+                    tab.agent_streaming = false;
+                    tab.pending_agent_response.clear();
+                    tab.pending_thought_response.clear();
+                    tab.progress_status = None;
+                    tab.activity_frame = 0;
+                    tab.pending_completed_turn = None;
+                    tab.messages.push(ChatMessage::System("Cancelled.".to_string()));
+                    tab.scroll_to_bottom();
                 } else {
                     self.should_quit = true;
                 }
@@ -2571,8 +2620,9 @@ mod tests {
         let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::unbounded_channel();
         let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
         let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::unbounded_channel();
         let debug_capture = Arc::new(AtomicBool::new(false));
-        App::new(prompt_tx, recommendation_tx, permission_tx, debug_capture, true, false)
+        App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, debug_capture, true, false)
     }
 
     // ─── word boundary helpers ──────────────────────────────────────────────

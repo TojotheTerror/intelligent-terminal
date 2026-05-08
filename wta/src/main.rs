@@ -1399,6 +1399,10 @@ async fn run_acp_app(
 
             let shell_mgr_for_recs = Arc::clone(&shell_mgr);
 
+            // Cancel channel for Ctrl+C handling: App produces, ACP client
+            // task consumes (one listener task inside run_acp_client).
+            let (cancel_tx, cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+
             // Spawn the ACP client directly. If the agent isn't installed or
             // fails to authenticate, the error surfaces inline as a Failed
             // connection state — no FRE / setup wizard.
@@ -1407,6 +1411,7 @@ async fn run_acp_app(
                 cli.acp_model.clone(),
                 event_tx.clone(),
                 prompt_rx,
+                cancel_rx,
                 Arc::clone(&shell_mgr),
                 wt_connected,
             ));
@@ -1431,7 +1436,7 @@ async fn run_acp_app(
             ));
 
             let autofix_enabled = !cli.no_autofix;
-            let mut app_state = app::App::new(prompt_tx, recommendation_tx, permission_tx, debug_capture_enabled, wt_connected, autofix_enabled);
+            let mut app_state = app::App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, debug_capture_enabled, wt_connected, autofix_enabled);
 
             if let Some((pane_id, tab_id, window_id)) = pane_identity {
                 app_state.pane_id = Some(pane_id);

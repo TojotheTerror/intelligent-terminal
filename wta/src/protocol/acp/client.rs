@@ -33,6 +33,16 @@ pub struct PromptSubmission {
     pub is_autofix: bool,
 }
 
+/// User-initiated cancel of an in-flight prompt. The App emits one of
+/// these on Ctrl+C; the ACP client task fires `session/cancel` to the
+/// agent and signals the per-prompt oneshot so the local task drops
+/// out of `conn.prompt().await` immediately even if the agent is slow
+/// or doesn't honor cancel.
+#[derive(Debug, Clone)]
+pub struct CancelRequest {
+    pub session_id: String,
+}
+
 impl PromptSubmission {
     pub fn new(text: String, pane_context: Option<PaneContext>) -> Self {
         Self::new_with_kind(text, pane_context, false)
@@ -1407,6 +1417,7 @@ pub async fn run_acp_client(
     acp_model_override: Option<String>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     mut prompt_rx: mpsc::UnboundedReceiver<PromptSubmission>,
+    mut cancel_rx: mpsc::UnboundedReceiver<CancelRequest>,
     shell_mgr: Arc<ShellManager>,
     wt_connected: bool,
 ) {
@@ -1421,6 +1432,7 @@ pub async fn run_acp_client(
         acp_model_override,
         event_tx.clone(),
         &mut prompt_rx,
+        &mut cancel_rx,
         shell_mgr,
         wt_connected,
     )
@@ -1441,6 +1453,7 @@ async fn run_inner(
     acp_model_override: Option<String>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     prompt_rx: &mut mpsc::UnboundedReceiver<PromptSubmission>,
+    cancel_rx: &mut mpsc::UnboundedReceiver<CancelRequest>,
     shell_mgr: Arc<ShellManager>,
     wt_connected: bool,
 ) -> Result<()> {
@@ -1726,8 +1739,59 @@ async fn run_inner(
     let in_flight_tabs: Arc<std::sync::Mutex<HashSet<String>>> =
         Arc::new(std::sync::Mutex::new(HashSet::new()));
 
+    // Per-prompt cancel oneshot, keyed on SessionId. Each spawned prompt
+    // task registers a sender here on entry and removes it on exit. The
+    // cancel listener task signals through it to break the spawned task
+    // out of `conn.prompt().await` even if the agent is slow to honor
+    // session/cancel.
+    let cancel_signals: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
+
     // The connection is shared across all spawned prompt tasks.
     let conn = Arc::new(conn);
+
+    // Cancel listener: receives Ctrl+C requests from the App, sends
+    // `session/cancel` to the agent (notification, fire-and-forget per
+    // protocol), and signals the per-prompt oneshot so the local task
+    // drops out of its `conn.prompt().await` immediately.
+    {
+        let conn_for_cancel = Arc::clone(&conn);
+        let cancel_signals_for_listener = Arc::clone(&cancel_signals);
+        // Move the cancel_rx into the listener task. The borrow checker
+        // forces us to use the `&mut` we got from run_inner via a
+        // helper: take the receiver by value.
+        let cancel_rx_owned = std::mem::replace(
+            cancel_rx,
+            mpsc::unbounded_channel().1, // dummy receiver; sender dropped immediately
+        );
+        tokio::task::spawn_local(async move {
+            let mut cancel_rx = cancel_rx_owned;
+            while let Some(req) = cancel_rx.recv().await {
+                let session_id_str = req.session_id.clone();
+                tracing::info!(target: "acp_cancel", session_id = %session_id_str, "cancel requested");
+                // Trigger local oneshot first so the spawned task exits
+                // promptly even if the agent ignores the cancel notification.
+                if let Some(sig) = cancel_signals_for_listener
+                    .lock()
+                    .unwrap()
+                    .remove(&session_id_str)
+                {
+                    let _ = sig.send(());
+                }
+                // Send session/cancel to the agent. Errors here (e.g.
+                // method_not_found from agents that don't support cancel)
+                // are non-fatal: the local oneshot already short-circuited
+                // the prompt future.
+                let session_id = acp::SessionId::new(session_id_str.clone());
+                if let Err(e) = conn_for_cancel
+                    .cancel(acp::CancelNotification::new(session_id))
+                    .await
+                {
+                    tracing::warn!(target: "acp_cancel", session_id = %session_id_str, error = ?e, "session/cancel rpc failed (likely unsupported)");
+                }
+            }
+        });
+    }
 
     // Prompt loop: spawn a task per submission so multiple in-flight
     // prompts on different tabs can stream concurrently.
@@ -1755,6 +1819,7 @@ async fn run_inner(
         let conn_task = Arc::clone(&conn);
         let tab_to_session_task = Arc::clone(&tab_to_session);
         let in_flight_tabs_task = Arc::clone(&in_flight_tabs);
+        let cancel_signals_task = Arc::clone(&cancel_signals);
         let event_tx_task = event_tx.clone();
         let shell_mgr_task = Arc::clone(&shell_mgr);
         let prompt_timing_task = Arc::clone(&state.prompt_timing);
@@ -1846,18 +1911,57 @@ async fn run_inner(
                 status: "Thinking...".to_string(),
             });
             prompt_timing_task.mark_prompt_sent(&prompt_session_id_str);
-            let result = conn_task
-                .prompt(acp::PromptRequest::new(
-                    prompt_session_id.clone(),
-                    vec![text.into()],
-                ))
-                .await;
-            complete_prompt_request(
-                result,
-                &prompt_timing_task,
-                &event_tx_task,
-                prompt_session_id_str,
-            );
+
+            // Register a cancel oneshot for this prompt. The cancel
+            // listener picks the sender out by session_id and signals it
+            // when the user presses Ctrl+C.
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+            cancel_signals_task
+                .lock()
+                .unwrap()
+                .insert(prompt_session_id_str.clone(), cancel_tx);
+
+            let prompt_fut = conn_task.prompt(acp::PromptRequest::new(
+                prompt_session_id.clone(),
+                vec![text.into()],
+            ));
+            tokio::pin!(prompt_fut);
+
+            let cancelled = tokio::select! {
+                result = &mut prompt_fut => {
+                    complete_prompt_request(
+                        result,
+                        &prompt_timing_task,
+                        &event_tx_task,
+                        prompt_session_id_str.clone(),
+                    );
+                    false
+                }
+                _ = cancel_rx => {
+                    // The user cancelled. Synthesize an AgentMessageEnd
+                    // so the App's session_tab cleanup runs even if the
+                    // agent never resolves the prompt future.
+                    tracing::info!(target: "acp_cancel", session_id = %prompt_session_id_str, "prompt task aborted by cancel");
+                    let _ = prompt_timing_task.complete(
+                        &prompt_session_id_str,
+                        false,
+                        Some("cancelled"),
+                    );
+                    let _ = event_tx_task.send(AppEvent::AgentMessageEnd {
+                        session_id: prompt_session_id_str.clone(),
+                    });
+                    true
+                }
+            };
+            // Drop the in-flight prompt future eagerly when cancelled to
+            // release the connection slot for the next prompt on this tab.
+            drop(prompt_fut);
+            let _ = cancelled;
+
+            cancel_signals_task
+                .lock()
+                .unwrap()
+                .remove(&prompt_session_id_str);
             in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
         });
     }
