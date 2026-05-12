@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| **Document status** | Draft v1.1 |
-| **Last updated** | 2026-05-11 |
+| **Document status** | Draft v1.2 |
+| **Last updated** | 2026-05-12 |
 | **Audience** | Microsoft internal security review |
 | **Component** | Windows Terminal fork with embedded AI agents (WT + WTA + WTCLI) |
 
@@ -22,10 +22,11 @@ Highest-priority residual risks:
 
 | Risk | Why it matters | Current state |
 |---|---|---|
-| **Settings mutation over COM** | `SetSettings` can persistently weaken future agent behavior, including confirmation policies and agent command selection. | COM method exists; stock `wtcli.exe` has no verb, but a custom allowed COM client can call it. |
 | **Create/split over COM** | `CreateTab` / `SplitPane` can spawn attacker-chosen commands as WT children. | Still exposed through COM and stock `wtcli.exe`. |
+| **Event broadcast disclosure** | `Subscribe` + `SendEvent` fan agent events out to every subscribed COM caller; a pane-context subscriber can passively observe other panes' agent prompts and tool calls. | No per-subscriber filtering; only platform COM activation policy gates `Subscribe`. |
 | **Prompt injection** | Capability transport proves that WTA is authorized; it does not prove the LLM's requested action is safe. | Confirmation policy exists, but defaults are currently `auto` and are not fully propagated/enforced. |
 | **Scrollback/log disclosure** | Pane output and WTA logs can contain tokens, source code, prompts, or command output. | Redaction is not implemented. |
+| **Settings persistence via filesystem** | A process running as the user can overwrite `settings.json` and persistently weaken AI policy or change agent selection. The COM `SetSettings` method has been removed (v1.2); the filesystem path remains. | No meta-confirmation when WTA reads policy-relevant settings on launch. |
 
 Key security claim: **shell input is capability-gated by inherited kernel handles**. An attacker that only has terminal-scoped COM access cannot directly forge the `send_input` pipe method. This does not remove the remaining COM mutation surface.
 
@@ -115,7 +116,7 @@ flowchart TB
 
     InPane -. "COM IProtocolServer<br/>C-COM calls" .-> ComSrv
 
-    ComSrv == "SetSettings /<br/>GetSettings" ==> Settings
+    ComSrv == "GetSettings" ==> Settings
     WTA -. "write debug logs" .-> Logs
 
     classDef ext fill:#f0e0e0,stroke:#a04040,color:#000
@@ -146,14 +147,16 @@ Reading the DFD: the practical pane attacker path is `InPane -> COM -> WT/settin
 
 | Method group | COM (`IProtocolServer`) | Stock `wtcli.exe` verb | Per-WTA pipe |
 |---|---:|---:|---:|
-| `Authenticate`, `GetCapabilities` | yes | yes | `hello` only |
+| `Authenticate`†, `GetCapabilities` | yes | yes | `hello` only |
 | `ListWindows/Tabs/Panes`, `ReadPaneOutput`, `GetActivePane`, `GetProcessStatus` | yes | yes | no |
 | `GetSettings`, `GetSessionVariable` | yes | no current verb | no |
 | `CreateTab`, `SplitPane`, `ClosePane`, `FocusPane`, events | yes | yes | no |
-| `SetSessionVariable`, `SetSettings` | yes | no current verb | no |
+| `SetSessionVariable` | yes | no current verb | no |
 | Direct shell input | no | no | yes |
 
-This split is intentional only for shell input. The remaining COM mutations are residual risk until migrated to the per-WTA pipe or otherwise restricted.
+† `Authenticate` is currently a no-op: it ignores its `token` argument and unconditionally sets `_authenticated = true`. See §6 row "COM caller spoofing".
+
+This split is intentional only for shell input. The remaining COM mutations (`CreateTab`, `SplitPane`, `ClosePane`, `FocusPane`, `SetSessionVariable`) are residual risk until migrated to the per-WTA pipe or otherwise restricted. `SetSettings` was removed from COM in v1.2; settings mutations must now go through the in-app code paths (Settings UI / direct file edit).
 
 ---
 
@@ -189,7 +192,7 @@ This split is intentional only for shell input. The remaining COM mutations are 
 | **In-pane process** | Runs as the user in a terminal pane; can read env, spawn processes, and use network. In tests, pane children could activate WT COM even without package identity. | Attack other panes, persist, or exfiltrate data. |
 | **Prompt-injected LLM** | Can ask the semi-trusted Agent CLI/WTA to perform harmful actions. | Convert untrusted text into agent action. |
 | **Compromised Agent CLI** | Runs as WTA child with normal user privileges and ACP stdio access. | Drive WT operations exposed to WTA. |
-| **Drive-by settings modifier** | Can write `settings.json` through filesystem or COM. | Persistently weaken future AI-session controls. |
+| **Drive-by settings modifier** | Can write `settings.json` through the filesystem (the COM `SetSettings` verb has been removed as of v1.2). | Persistently weaken future AI-session controls. |
 | **Stale protocol client** | Uses older `wtcli` / COM projection against newer IDL. | Mostly DoS or accidental misuse. |
 
 Out of scope: kernel exploits, compromise of WT's own binaries, malicious logged-in user, and physical access.
@@ -221,29 +224,17 @@ Security guarantees:
 
 Non-guarantee: if the Agent CLI or LLM is prompt-injected and WTA is authorized, the pipe correctly carries the malicious request. This must be controlled by confirmation, insert-only mode, rate limiting, and prompt hygiene.
 
-### 5.2 Settings mutation paths
+### 5.2 Settings mutation path
 
-Two distinct paths can persistently change AI policy and agent selection:
-
-**Path A — via COM:**
-```text
-in-pane process
-  -> custom COM client
-  -> IProtocolServer::SetSettings
-  -> settings.json
-  -> future WTA session reads weakened policy / attacker command
-```
-
-**Path B — direct file write (also reachable from a compromised Agent CLI):**
 ```text
 attacker-controlled user-context process (in-pane shell, Agent CLI, etc.)
   -> overwrite %LOCALAPPDATA%\...\settings.json
   -> future WTA session reads weakened policy / attacker command
 ```
 
-Path A is the highest-priority residual *architecture* risk, because it bypasses any future per-WTA capability gating that we add to other mutations. Stock `wtcli.exe` does not expose a `set-settings` verb, but the COM method remains callable by a custom COM client in an allowed terminal-launched COM context.
+As of v1.2 the COM `SetSettings` verb has been removed, so the architectural path through `IProtocolServer` no longer exists. The remaining path is direct filesystem write.
 
-Path B is not a new privilege — the attacker already runs as the user — but it shares the *consequence* (persistently weakening AI policy without any in-band confirmation). Both paths therefore need the same meta-confirmation / policy-gating mitigation; technical controls limited to one path are insufficient.
+This is not a new privilege — the attacker already runs as the user — but it persistently weakens AI policy without any in-band confirmation. An Agent CLI (semi-trusted) and a pane-context process can both reach the file: `settings.json` lives at a well-known per-user path that any user-context process can discover via `%LOCALAPPDATA%` or by enumerating package data, so path knowledge is not a meaningful gate. The mitigation is therefore at the *read* side: WTA / agent launch must meta-confirm changes to confirmation policy and agent command settings before honoring them, rather than relying on the file being write-protected.
 
 ---
 
@@ -251,8 +242,8 @@ Path B is not a new privilege — the attacker already runs as the user — but 
 
 | Threat | Category | Severity | Current control / gap |
 |---|---|---:|---|
-| COM caller spoofing | Spoofing | High | `Authenticate(token)` ignores its argument and unconditionally sets `_authenticated = true`. Only `Subscribe` and `SendEvent` enforce `_authenticated` (`TerminalProtocolComServer.cpp:738,757`); every read and every mutation method bypasses it. Platform COM activation policy is therefore the only effective gate. |
-| `SetSettings` over COM | Tampering / EoP | Critical | JSON is validated and backups are created, but no user confirmation or per-WTA capability gate is enforced. |
+| COM caller spoofing | Spoofing | High | `Authenticate(token)` ignores its argument and unconditionally sets `_authenticated = true` (`TerminalProtocolComServer.cpp:268-288`). The `_authenticated` flag is theater, not partial coverage: only `Subscribe` (line 695) and `SendEvent` (line 714) even check it, and both are trivially passed by any caller that issues `Authenticate` first. No method is meaningfully gated by `_authenticated`. Platform COM activation policy is the only effective gate. |
+| Event broadcast leaks cross-pane agent activity | Information disclosure | High | `SendEvent` calls `s_NotifyEventToComClients` (`TerminalProtocolComServer.cpp:749`) and fans `agent_event` envelopes out to every subscribed COM caller. A pane-context attacker that activates `IProtocolServer` and calls `Subscribe` passively receives agent prompts, tool calls, and autofix state across all panes — no `ReadPaneOutput` invocation required. No per-subscriber filtering today. |
 | `CreateTab` / `SplitPane` arbitrary commandline | Tampering / EoP | High, Critical if cross-integrity method access is ever allowed or the user accepts UAC elevation | Same-integrity WT gives same-user process creation and persistence. Elevated WT cross-integrity access was denied in tests when requesting `IProtocolServer`, but should remain a regression test. |
 | `ReadPaneOutput` over COM | Information disclosure | High | Returns arbitrary scrollback; no redaction. |
 | `GetSettings` / topology reads | Information disclosure | Medium | Reveals settings, cwd, pids, pane and tab topology. |
@@ -288,7 +279,7 @@ When `bInheritHandles=TRUE` is used with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, in
 | Mitigation | Status | Covers |
 |---|---|---|
 | Move direct shell input off COM and into the per-WTA inherited pipe | Implemented | Direct keystroke injection by COM/`wtcli` callers |
-| Migrate critical mutations (`SetSettings`, `CreateTab`, `SplitPane`, `SetSessionVariable`, `ClosePane`, `FocusPane`) to per-WTA capability gating or add equivalent caller restriction | Planned | Main COM residual risk |
+| Migrate critical mutations (`CreateTab`, `SplitPane`, `SetSessionVariable`, `ClosePane`, `FocusPane`) to per-WTA capability gating or add equivalent caller restriction | Planned | Main COM residual risk |
 | Require confirmation for sensitive operations and for edits to confirmation policy itself | Partial / not enforcement-complete | Prompt injection, settings persistence |
 | Default `aiIntegration.confirmation.inputOperations` and `createOperations` to `prompt` on fresh install | Not implemented; current defaults are `auto` | Prompt-injection blast radius |
 | Strip `WT_PROTOCOL_PIPE_R/W` env vars and clear `HANDLE_FLAG_INHERIT` immediately in WTA | Implemented | Grandchild handle leakage |
@@ -297,7 +288,7 @@ When `bInheritHandles=TRUE` is used with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, in
 | Redact secrets in scrollback context and WTA logs | Roadmap | Exfiltration to LLM/log files |
 | Insert-only mode for shell input recommendations | Partial | Reduces accidental execution; not universal for all `send_input` calls |
 | Per-turn rate limit for shell-input calls | Roadmap | Agent runaway / prompt-injection loops |
-| Pin or verify built-in Agent CLI binary identity | Partial | Agent CLI supply chain |
+| Pin or verify built-in Agent CLI binary identity | Partial — known-location / PATH resolution only; no signature pinning | Agent CLI supply chain |
 | Autofix opt-in / first-run hardening | Not implemented; `autoFixEnabled` defaults to `true` | Surprise background analysis and prompt-injection exposure |
 
 ---
@@ -305,12 +296,13 @@ When `bInheritHandles=TRUE` is used with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, in
 ## 8. Residual Risks
 
 1. **Terminal-scoped COM mutation surface.** Until critical mutations move off COM or receive equivalent authorization, a pane-context COM caller can affect other panes and future AI behavior.
-2. **Prompt injection.** The pipe proves the caller has WTA's capability; it does not prove the LLM request is safe.
-3. **Settings persistence.** `settings.json` can persistently weaken confirmation policy and agent selection.
-4. **Scrollback exfiltration.** `ReadPaneOutput` can pass sensitive pane text to WTA and then to the Agent CLI / LLM provider.
-5. **Log disclosure.** WTA logs may contain prompts, partial responses, and command lines.
-6. **Handle leak regression.** Current handle hygiene is strong, but future WTA spawn-site changes can reintroduce leaks if they enable broad handle inheritance.
-7. **Platform-dependent COM security.** Cross-integrity COM behavior should be regression-tested with the real `IProtocolServer` IID or a harmless method such as `GetCapabilities`; `IUnknown`-only activation is not sufficient evidence.
+2. **Event broadcast exfiltration.** `Subscribe` + `SendEvent` deliver agent events to every COM subscriber; a pane-context subscriber can passively observe other panes' agent activity until per-subscriber filtering is added.
+3. **Prompt injection.** The pipe proves the caller has WTA's capability; it does not prove the LLM request is safe.
+4. **Filesystem-only settings persistence.** Any user-context process can overwrite `settings.json` and persistently weaken confirmation policy or change agent selection. The COM verb is gone (v1.2), but the file remains writable by the user.
+5. **Scrollback exfiltration.** `ReadPaneOutput` can pass sensitive pane text to WTA and then to the Agent CLI / LLM provider.
+6. **Log disclosure.** WTA logs may contain prompts, partial responses, and command lines.
+7. **Handle leak regression.** Current handle hygiene is strong, but future WTA spawn-site changes can reintroduce leaks if they enable broad handle inheritance.
+8. **Platform-dependent COM security.** Cross-integrity COM behavior should be regression-tested with the real `IProtocolServer` IID or a harmless method such as `GetCapabilities`; `IUnknown`-only activation is not sufficient evidence.
 
 ---
 
@@ -318,14 +310,16 @@ When `bInheritHandles=TRUE` is used with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, in
 
 | Priority | Item |
 |---|---|
-| **P0** | Move `SetSettings`, `CreateTab`, and `SplitPane` behind per-WTA capability gating or equivalent explicit authorization. |
+| **P0** | Move `CreateTab`, `SplitPane`, `SetSessionVariable`, `ClosePane`, `FocusPane` behind per-WTA capability gating or equivalent explicit authorization. |
+| **P0** | Add per-subscriber filtering / authorization to `Subscribe` + `SendEvent` so a pane-context COM subscriber cannot passively observe other panes' agent events. |
 | **P0** | Change fresh-install confirmation defaults from `auto` to `prompt`; enforce policy in WTA launch/runtime paths. |
-| **P1** | Add meta-confirmation for changes to `aiIntegration.confirmation.*` and agent command settings. |
+| **P1** | Add meta-confirmation for changes to `aiIntegration.confirmation.*` and agent command settings (settings.json read-side gate). |
 | **P1** | Add structured audit logging and log rotation. |
 | **P1** | Add redaction for pane context and WTA logs. |
 | **P1** | Add per-turn shell-input rate limiting. |
 | **P2** | Migrate read methods (`ReadPaneOutput`, `GetSettings`, topology reads) after mutation methods. |
-| **P2** | Tighten built-in Agent CLI resolution and binary identity checks. |
+| **P2** | Tighten built-in Agent CLI resolution and binary identity checks (signature pinning, not just known-location). |
+| **P2** | Autofix opt-in / first-run hardening — change `autoFixEnabled` default to `false` (or surface a first-run prompt) so background analysis is not enabled by surprise. |
 | **P3** | Consider explicit COM security descriptor / caller allow-list once legitimate callers are reduced. |
 
 ---
@@ -337,7 +331,8 @@ When `bInheritHandles=TRUE` is used with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, in
 3. Are WTA logs ever collected by telemetry or support tooling? If yes, redaction becomes mandatory rather than best effort.
 4. Should `settings.json` ACLs be tightened beyond inherited per-user filesystem defaults?
 5. How should third-party scripts that previously expected direct shell-input automation be handled?
-6. Should WT set an explicit `CoInitializeSecurity` descriptor for the COM server instead of relying on platform defaults?
+
+(Previous OQ6 — explicit `CoInitializeSecurity` descriptor — is resolved into the §9 P3 entry "Consider explicit COM security descriptor / caller allow-list".)
 
 ---
 
