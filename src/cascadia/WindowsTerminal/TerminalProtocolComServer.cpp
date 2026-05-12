@@ -304,7 +304,6 @@ winrt::hstring TerminalProtocolComServer::GetCapabilities()
         "split_pane",
         "close_pane",
         "set_session_variable",
-        "set_settings",
         "subscribe",
         "unsubscribe",
         "send_event",
