@@ -19,7 +19,7 @@ pub fn render(
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Agents  (↑↓ select · Enter activate · F5 refresh) ");
+        .title(" Agents  (↑↓ select · Enter activate · Del remove) ");
 
     let sorted = reg.iter_sorted();
     tracing::debug!(
