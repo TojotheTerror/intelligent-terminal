@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <root>
   <!-- 
     Microsoft ResX Schema 
@@ -965,6 +965,10 @@
   <data name="FreOverlay_WelcomeSubtitlePrefix" xml:space="preserve">
     <value>エラーの説明、コマンドの下書き、タスクの打開を作業しながらその場で手助けする組み込みアシスタントを設定します。</value>
   </data>
+  <data name="FreOverlay_PolicyLocked" xml:space="preserve">
+    <value>この設定は組織によって管理されています。</value>
+    <comment>Text shown when Group Policy controls this feature. Standard Windows policy notice wording.</comment>
+  </data>
   <data name="FreOverlay_WelcomeSubtitleLink" xml:space="preserve">
     <value>Intelligent Terminal の詳細を見る</value>
     <comment>{Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name.</comment>
@@ -1077,5 +1081,13 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="FreOverlay_ToggleOff" xml:space="preserve">
     <value>オフ</value>
+  </data>
+  <data name="AgentBlockedByPolicyTitle" xml:space="preserve">
+    <value>AI πé¿πâ╝πé╕πéºπâ│πâêπü»σê╢ΘÖÉπüòπéîπüªπüäπü╛πüÖ</value>
+    <comment>Title shown when Group Policy blocks the user from opening the agent pane. "agent" refers to an AI intelligent agent (e.g., Copilot, Claude), not a proxy or human agent.</comment>
+  </data>
+  <data name="AgentBlockedByPolicySubtitle" xml:space="preserve">
+    <value>τ╡äτ╣öπü«πâ¥πâ¬πé╖πâ╝πü½πéêπéèπÇüAI πé¿πâ╝πé╕πéºπâ│πâêπü«σê⌐τö¿πü»Φ¿▒σÅ»πüòπéîπüªπüäπü╛πü¢πéôπÇéπé╡πâ¥πâ╝πâêπüîσ┐àΦªüπü¬σá┤σÉêπü»πÇüIT τ«íτÉåΦÇàπü½πüèσòÅπüäσÉêπéÅπü¢πüÅπüáπüòπüäπÇé</value>
+    <comment>Subtitle shown when Group Policy blocks all AI agents from running.</comment>
   </data>
 </root>

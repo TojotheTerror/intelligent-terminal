@@ -64,14 +64,16 @@ namespace winrt::TerminalApp::implementation
         SessionManagementToggle().OnContent(winrt::box_value(RS_(L"FreOverlay_ToggleOn")));
         SessionManagementToggle().OffContent(winrt::box_value(RS_(L"FreOverlay_ToggleOff")));
 
-        // Populate agent ComboBox: Copilot (always) + detected agents
+        // Populate agent ComboBox using GPO-filtered list — only agents
+        // permitted by policy are shown.
+        const auto allowedAgents = Reg::FilteredAcpAgents();
         auto items = AgentComboBox().Items();
         items.Clear();
         int32_t selectedIndex = 0;
         int32_t idx = 0;
-        const auto currentAgent = globals.AcpAgent();
+        const auto currentAgent = globals.EffectiveAcpAgent();
 
-        for (const auto& a : Reg::BuiltinAcpAgents)
+        for (const auto& a : allowedAgents)
         {
             const bool installed = _IsAgentInstalled(std::wstring{ a.id }.c_str());
             const bool isCopilot = (a.id == L"copilot");
@@ -106,6 +108,15 @@ namespace winrt::TerminalApp::implementation
             AgentComboBox().SelectedIndex(selectedIndex);
         }
 
+        // Agent dropdown — show policy notice if AllowedAgents GPO is active
+        if (globals.IsAgentPolicyLocked())
+        {
+            const auto policyText = RS_(L"FreOverlay_PolicyLocked");
+            AgentPolicyNotice().Text(policyText);
+            AgentPolicyNotice().Visibility(Visibility::Visible);
+            Automation::AutomationProperties::SetHelpText(AgentComboBox(), policyText);
+        }
+
         // Populate pane position ComboBox
         auto posItems = PanePositionComboBox().Items();
         posItems.Clear();
@@ -120,8 +131,29 @@ namespace winrt::TerminalApp::implementation
         else if (currentPos == L"top") PanePositionComboBox().SelectedIndex(3);
         else PanePositionComboBox().SelectedIndex(0); // default: bottom
 
-        // Set toggles from current settings
-        AutoErrorToggle().IsOn(globals.AutoFixEnabled());
+        // Set toggles from current settings, respecting GPO policy
+        AutoErrorToggle().IsOn(globals.EffectiveAutoFixEnabled());
+        if (globals.IsAutoFixPolicyLocked())
+        {
+            AutoErrorToggle().IsEnabled(false);
+            const auto policyText = RS_(L"FreOverlay_PolicyLocked");
+            AutoErrorPolicyNotice().Text(policyText);
+            AutoErrorPolicyNotice().Visibility(Visibility::Visible);
+            // Accessibility: explain why the toggle is disabled
+            Automation::AutomationProperties::SetHelpText(AutoErrorToggle(), policyText);
+        }
+
+        // Session management toggle — honour AllowAgentSessionHooks GPO
+        if (globals.IsAgentSessionHooksPolicyLocked())
+        {
+            SessionManagementToggle().IsOn(false);
+            SessionManagementToggle().IsEnabled(false);
+            const auto policyText = RS_(L"FreOverlay_PolicyLocked");
+            SessionHooksPolicyNotice().Text(policyText);
+            SessionHooksPolicyNotice().Visibility(Visibility::Visible);
+            // Accessibility: explain why the toggle is disabled
+            Automation::AutomationProperties::SetHelpText(SessionManagementToggle(), policyText);
+        }
     }
 
     // ── Agent selection changed ─────────────────────────────────────────
@@ -293,7 +325,10 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        // 4. Install hooks if session management is enabled
+        // 4. Install hooks (non-blocking — agent works without hooks)
+        //    Skip if AllowAgentSessionHooks GPO blocks it.
+        if (SessionManagementToggle().IsOn() &&
+            !_settings.GlobalSettings().IsAgentSessionHooksPolicyLocked())
         {
             auto self = weak.get();
             if (!self) co_return;
