@@ -5103,8 +5103,12 @@ namespace winrt::TerminalApp::implementation
         // been created yet (TermControl is set up before the Pane wraps it).
         //
         // VtSequenceReceived fires on the connection reader thread (background).
-        // _FindSessionIdForControl accesses _tabs which has UI thread affinity,
-        // so we dispatch the session ID lookup + event raise to the UI thread.
+        // The dispatched continuation calls `_FindTabIdForControl`, which walks
+        // `_tabs` and has UI thread affinity, so the event raise has to run on
+        // the UI thread. `_FindSessionIdForControl` itself is thread-safe
+        // (only reads `Connection().SessionId()`) and could be called inline,
+        // but the rest of the work in this handler is gated on `_FindTabIdForControl`
+        // and the protocol event raise, so we just defer the whole body.
         {
             winrt::weak_ref<TermControl> weakTerm{ term };
 
@@ -5114,9 +5118,9 @@ namespace winrt::TerminalApp::implementation
                     if (!strongThis)
                         return;
 
-                    // Dispatch to UI thread: _FindSessionIdForControl accesses _tabs
-                    // which has UI thread affinity.  Fire-and-forget — don't block
-                    // the connection reader thread.
+                    // Dispatch to UI thread for the `_FindTabIdForControl` walk
+                    // of `_tabs` and the protocol event raise. Fire-and-forget —
+                    // don't block the connection reader thread.
                     strongThis->Dispatcher().RunAsync(
                         winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
                         [weakThis, weakTerm, seq]() {
@@ -5253,12 +5257,33 @@ namespace winrt::TerminalApp::implementation
                         return;
                     }
 
-                    // Dispatch to UI thread: _FindSessionIdForControl accesses _tabs.
+                    // Resolve the pane id SYNCHRONOUSLY here, while the
+                    // control is still alive. If we deferred it into the
+                    // dispatched lambda below, a `Closed` event raised as
+                    // part of tab teardown would race with the
+                    // TermControl/Connection destructors: by the time the
+                    // UI thread runs the dispatched continuation,
+                    // `weakTerm.get()` returns null and the event is
+                    // dropped silently — leaving wta's session-list row
+                    // stuck at Idle after the user closed the tab.
+                    // `_FindSessionIdForControl` only reads
+                    // `control.Connection().SessionId()`, no `_tabs`
+                    // access, so it is safe off the UI thread.
+                    const auto paneIdStr = strongThis->_FindSessionIdForControl(control);
+                    if (paneIdStr.empty())
+                        return;
+
+                    // Dispatch only the actual event raise (and the
+                    // `tab_id` lookup, which DOES touch `_tabs`) to the
+                    // UI thread. The captured `paneIdStr` is a plain
+                    // std::string and survives the term's destruction;
+                    // `tab_id` falls back to empty when the term is
+                    // already gone, but the event still fires with the
+                    // pane_id so wta's PaneClosed prune can run.
                     strongThis->Dispatcher().RunAsync(
                         winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
-                        [weakThis, weakTerm, stateStr]() {
+                        [weakThis, weakTerm, paneIdStr, stateStr]() {
                             auto page = weakThis.get();
-                            auto term2 = weakTerm.get();
                             if (!page)
                                 return;
 
@@ -5268,11 +5293,15 @@ namespace winrt::TerminalApp::implementation
                             // when an agent CLI exits and the pane is closed.
                             // Volume is low (a handful of events per pane
                             // lifecycle), so always forward.
-                            const auto paneIdStr = term2
-                                ? page->_FindSessionIdForControl(term2)
-                                : std::string{};
-                            if (paneIdStr.empty())
-                                return;
+                            // `_FindTabIdForControl` walks `_tabs`, so it
+                            // must run on the UI thread AND have a live
+                            // term to compare panes against. If the term
+                            // already died (close-time race), fall back
+                            // to no tab_id — autofix routing may be
+                            // imperfect for this one event, but the
+                            // pane_id alone is sufficient for the
+                            // session-list / PaneClosed prune path.
+                            auto term2 = weakTerm.get();
                             const auto tabIdStr = term2
                                 ? page->_FindTabIdForControl(term2)
                                 : std::string{};
