@@ -1037,9 +1037,22 @@ async fn build_terminal_context_json(shell_mgr: &ShellManager) -> Option<String>
         "window_title": target_window_title,
         "cwd": target_cwd,
         "profile": target_profile,
+        "locale": user_locale_tag(),
         "buffer": buffer,
     }))
     .ok()
+}
+
+/// User's UI locale as a BCP-47 tag, suitable for embedding in
+/// runtime context JSON shipped to the agent.
+///
+/// Pseudo-locales (`qps-ploc*`) are passed through verbatim. Unlike
+/// `LANG`/`LC_ALL` in `spawn.rs` — which feed libc and have to be real
+/// POSIX locales — this field is just metadata for an LLM, which will
+/// either recognise the tag or treat it as opaque text. Either way it's
+/// honest: it reflects exactly what the user picked in the UI.
+fn user_locale_tag() -> String {
+    rust_i18n::locale().to_string()
 }
 
 async fn build_prompt_text(
@@ -1148,6 +1161,7 @@ async fn build_prompt_text(
                     let json = serde_json::to_string(&serde_json::json!({
                         "profile": profile,
                         "cwd": cwd,
+                        "locale": user_locale_tag(),
                     }))
                     .unwrap_or_else(|_| "{}".to_string());
                     runtime_sections.push(format!(
@@ -2700,11 +2714,25 @@ async fn dispatch_prompt_body(
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_prompt_request, requested_model_id, summarize_agent_identity,
+        complete_prompt_request, requested_model_id, summarize_agent_identity, user_locale_tag,
         PromptTimingState,
     };
     use crate::app::AppEvent;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn user_locale_tag_returns_current_locale_verbatim() {
+        let _g = crate::test_support::lock_locale();
+        // Real locales pass through unchanged.
+        rust_i18n::set_locale("zh-CN");
+        assert_eq!(user_locale_tag(), "zh-CN");
+        rust_i18n::set_locale("en-US");
+        assert_eq!(user_locale_tag(), "en-US");
+        // Pseudo-locales are passed through too — agents treat unknown
+        // BCP-47 tags as opaque metadata, so there's no need to remap.
+        rust_i18n::set_locale("qps-ploca");
+        assert_eq!(user_locale_tag(), "qps-ploca");
+    }
 
     #[test]
     fn parses_model_from_separate_flag() {
