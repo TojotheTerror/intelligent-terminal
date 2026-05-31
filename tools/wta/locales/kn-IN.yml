@@ -138,6 +138,9 @@ system.cancelled: "ರದ್ದುಮಾಡಲಾಗಿದೆ."
 system.no_prompt_in_flight: "ಪ್ರಗತಿಯಲ್ಲಿ ಯಾವುದೇ ಪ್ರಾಂಪ್ಟ್ ಇಲ್ಲ."
 system.authentication_failed: "ದೃಢೀಕರಣ ವಿಫಲವಾಗಿದೆ"
 system.command_copied_retry: "ಕಮಾಂಡ್ ನಕಲಿಸಲಾಗಿದೆ — ಅದನ್ನು ಇನ್ನೊಂದು ಟರ್ಮಿನಲ್‌ನಲ್ಲಿ ಚಲಾಯಿಸಿ, ನಂತರ ಮರುಪ್ರಯತ್ನಿಸಲು Enter ಒತ್ತಿ"  # {Locked="Enter"}
+system.stopped_max_tokens: "ಮಾದರಿಯ ಔಟ್‌ಪುಟ್ ಮಿತಿಯನ್ನು ತಲುಪಿದ ನಂತರ ಪ್ರತಿಕ್ರಿಯೆಯನ್ನು ಕತ್ತರಿಸಲಾಗಿದೆ."
+system.stopped_max_turn_requests: "ಈ ಸರದಿಗೆ ತನ್ನ ವಿನಂತಿ ಮಿತಿಯನ್ನು ತಲುಪಿದ ನಂತರ ಏಜೆಂಟ್ ನಿಂತಿತು."
+system.stopped_refusal: "ಏಜೆಂಟ್ ಈ ವಿನಂತಿಯನ್ನು ಮುಂದುವರಿಸಲು ನಿರಾಕರಿಸಿತು."
 system.agent_busy: "ಈ ಟ್ಯಾಬ್‌ನಲ್ಲಿ Agent ಕಾರ್ಯನಿರತವಾಗಿದೆ — ಪ್ರಸ್ತುತ ಪ್ರಾಂಪ್ಟ್ ಮುಗಿಯುವವರೆಗೆ ಕಾಯಿರಿ."
 system.resuming_session: "ಸೆಷನ್ %{session_id} ಪುನರಾರಂಭಿಸಲಾಗುತ್ತಿದೆ..."
 system.unknown_command: "ಅಪರಿಚಿತ ಆದೇಶ \"%{command}\" — ಪ್ರಾಂಪ್ಟ್ ಆಗಿ ಕಳುಹಿಸಲಾಗಿದೆ. ಪಟ್ಟಿಗಾಗಿ /help ಟೈಪ್ ಮಾಡಿ."  # {Locked="/help"} — slash-command name.

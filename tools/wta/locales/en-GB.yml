@@ -57,7 +57,7 @@ chat.turn_executed: "→ executed: %{title}"
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Ask anything, / for commands.."  # {Locked="/"}
 input.placeholder.connecting: "connecting..."
-input.placeholder.disconnected: "disconnect"
+input.placeholder.disconnected: "disconnected"
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -127,6 +127,9 @@ system.cancelled: "Cancelled."
 system.no_prompt_in_flight: "No prompt in flight."
 system.authentication_failed: "Authentication failed"
 system.command_copied_retry: "Command copied — run it in another terminal, then press Enter to retry"  # {Locked="Enter"}
+system.stopped_max_tokens: "The response was cut off after reaching the model's output limit."
+system.stopped_max_turn_requests: "The agent stopped after reaching its request limit for this turn."
+system.stopped_refusal: "The agent declined to continue with this request."
 system.agent_busy: "Agent is busy on this tab — wait for the current prompt to finish."
 system.resuming_session: "Resuming session %{session_id}..."
 system.unknown_command: "Unknown command \"%{command}\" — sent as prompt. Type /help for the list."

@@ -127,6 +127,9 @@ system.cancelled: "Ακυρώθηκε."
 system.no_prompt_in_flight: "Δεν υπάρχει ενεργή εντολή."
 system.authentication_failed: "Ο έλεγχος ταυτότητας απέτυχε"
 system.command_copied_retry: "Η εντολή αντιγράφηκε — εκτελέστε την σε άλλο τερματικό, μετά πατήστε Enter για νέα δοκιμή"  # {Locked="Enter"}
+system.stopped_max_tokens: "Η απάντηση περικόπηκε μετά την επίτευξη του ορίου εξόδου του μοντέλου."
+system.stopped_max_turn_requests: "Ο πράκτορας σταμάτησε μετά την επίτευξη του ορίου αιτημάτων για αυτόν τον γύρο."
+system.stopped_refusal: "Ο πράκτορας αρνήθηκε να συνεχίσει με αυτό το αίτημα."
 system.agent_busy: "Ο agent είναι απασχολημένος σε αυτήν την καρτέλα — περιμένετε να ολοκληρωθεί η τρέχουσα προτροπή."
 system.resuming_session: "Συνέχιση της περιόδου λειτουργίας %{session_id}..."
 system.unknown_command: "Άγνωστη εντολή \"%{command}\" — στάλθηκε ως προτροπή. Πληκτρολογήστε /help για τη λίστα."  # {Locked="/help"} — slash-command name.

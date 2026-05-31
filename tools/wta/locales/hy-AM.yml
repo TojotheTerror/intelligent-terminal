@@ -154,6 +154,9 @@ system.cancelled: "Չեղարկված է։"
 system.no_prompt_in_flight: "Գործընթացում գտնվող հարցում չկա։"
 system.authentication_failed: "Նույնականացումը ձախողվեց"
 system.command_copied_retry: "Հրամանը պատճենվեց — գործարկեք այն մեկ այլ տերմինալում, ապա սեղմեք Enter կրկին փորձելու համար"  # {Locked="Enter"}
+system.stopped_max_tokens: "Պատասխանը կտրվեց՝ հասնելով մոդելի ելքի սահմանաչափին։"
+system.stopped_max_turn_requests: "Գործակալը կանգ առավ՝ հասնելով այս հերթի հարցումների սահմանաչափին։"
+system.stopped_refusal: "Գործակալը հրաժարվեց շարունակել այս հարցումը։"
 system.agent_busy: "Agent-ը զբաղված է այս ներդիրում — սպասեք, մինչև ընթացիկ հուշումն ավարտվի։"
 system.resuming_session: "Վերսկսվում է աշխատաշրջանը %{session_id}..."
 system.unknown_command: "Անհայտ հրաման \"%{command}\" — ուղարկվել է որպես հուշում։ Ցանկի համար մուտքագրեք /help։"  # {Locked="/help"} — slash-command name.

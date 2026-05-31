@@ -134,6 +134,9 @@ system.cancelled: "Anulowano."
 system.no_prompt_in_flight: "Brak aktywnego zapytania."
 system.authentication_failed: "Uwierzytelnianie nie powiodło się"
 system.command_copied_retry: "Polecenie skopiowane — uruchom je w innym terminalu, a następnie naciśnij Enter, aby ponowić próbę"  # {Locked="Enter"}
+system.stopped_max_tokens: "Odpowiedź została obcięta po osiągnięciu limitu danych wyjściowych modelu."
+system.stopped_max_turn_requests: "Agent zatrzymał się po osiągnięciu limitu żądań dla tej tury."
+system.stopped_refusal: "Agent odmówił kontynuowania tego żądania."
 system.agent_busy: "Agent jest zajęty na tej karcie — poczekaj, aż bieżący monit się zakończy."
 system.resuming_session: "Wznawianie sesji %{session_id}..."
 system.unknown_command: "Nieznane polecenie \"%{command}\" — wysłano jako monit. Wpisz /help, aby wyświetlić listę."  # {Locked="/help"}

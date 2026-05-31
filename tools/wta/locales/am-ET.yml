@@ -57,7 +57,7 @@ chat.turn_executed: "→ ተፈጽሟል: %{title}"
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Ask anything, / for commands.."  # {Locked="/"}
 input.placeholder.connecting: "connecting..."
-input.placeholder.disconnected: "disconnect"
+input.placeholder.disconnected: "disconnected"
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -127,6 +127,9 @@ system.cancelled: "Cancelled."
 system.no_prompt_in_flight: "No prompt in flight."
 system.authentication_failed: "Authentication failed"
 system.command_copied_retry: "Command copied — run it in another terminal, then press Enter to retry"  # {Locked="Enter"}
+system.stopped_max_tokens: "ምላሹ የሞዴሉ የውፅዓት ገደብ ላይ ከደረሰ በኋላ ተቆርጧል።"
+system.stopped_max_turn_requests: "ወኪሉ ለዚህ ዙር የጥያቄ ገደቡ ላይ ከደረሰ በኋላ ቆሟል።"
+system.stopped_refusal: "ወኪሉ በዚህ ጥያቄ መቀጠል አልፈለገም።"
 system.agent_busy: "Agent በዚህ ትር ላይ በስራ ላይ ነው — የአሁኑ ጥያቄ እስኪያልቅ ይጠብቁ።"
 system.resuming_session: "ክፍለ ጊዜ %{session_id} እንደገና በመቀጠል ላይ..."
 system.unknown_command: "ያልታወቀ ትዕዛዝ \"%{command}\" — እንደ ጥያቄ ተልኳል። ዝርዝሩን ለማየት /help ይተይቡ።"  # {Locked="/help"} — slash-command name.

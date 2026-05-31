@@ -138,6 +138,9 @@ system.cancelled: "ரத்துசெய்யப்பட்டது."
 system.no_prompt_in_flight: "நிலுவையில் எந்தப் பிராம்ப்ட்டும் இல்லை."
 system.authentication_failed: "அங்கீகாரம் தோல்வியடைந்தது"
 system.command_copied_retry: "கட்டளை நகலெடுக்கப்பட்டது — அதை மற்றொரு டெர்மினலில் இயக்கவும், பின்னர் மீண்டும் முயற்சிக்க Enter அழுத்தவும்"  # {Locked="Enter"}
+system.stopped_max_tokens: "மாதிரியின் வெளியீட்டு வரம்பை எட்டிய பிறகு பதில் துண்டிக்கப்பட்டது."
+system.stopped_max_turn_requests: "இந்த முறைக்கான கோரிக்கை வரம்பை எட்டிய பிறகு முகவர் நிறுத்தப்பட்டார்."
+system.stopped_refusal: "இந்தக் கோரிக்கையைத் தொடர முகவர் மறுத்துவிட்டார்."
 system.agent_busy: "இந்தத் தாவலில் Agent பிஸியாக உள்ளது — தற்போதைய prompt முடியும் வரை காத்திருக்கவும்."
 system.resuming_session: "அமர்வு %{session_id} மீண்டும் தொடங்கப்படுகிறது..."
 system.unknown_command: "அறியப்படாத கட்டளை \"%{command}\" — prompt ஆக அனுப்பப்பட்டது. பட்டியலுக்கு /help எனத் தட்டச்சு செய்யவும்."  # {Locked="/help"} — slash-command name.

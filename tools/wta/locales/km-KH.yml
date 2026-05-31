@@ -143,6 +143,9 @@ system.cancelled: "បានបោះបង់។"
 system.no_prompt_in_flight: "គ្មានសំណើកំពុងដំណើរការ។"
 system.authentication_failed: "ការផ្ទៀងផ្ទាត់បរាជ័យ"
 system.command_copied_retry: "ពាក្យបញ្ជាត្រូវបានចម្លង — ដំណើរការវានៅក្នុង terminal មួយទៀត រួចចុច Enter ដើម្បីសាកល្បង"  # {Locked="Enter"}
+system.stopped_max_tokens: "ការឆ្លើយតបត្រូវបានកាត់ផ្តាច់ បន្ទាប់ពីឈានដល់ដែនកំណត់លទ្ធផលរបស់ម៉ូដែល។"
+system.stopped_max_turn_requests: "ភ្នាក់ងារបានឈប់ បន្ទាប់ពីឈានដល់ដែនកំណត់សំណើសម្រាប់វេននេះ។"
+system.stopped_refusal: "ភ្នាក់ងារបានបដិសេធមិនបន្តសំណើនេះ។"
 system.agent_busy: "AI អេជេន្ត់កំពុងរវល់នៅលើផ្ទាំងនេះ — រង់ចាំឱ្យសំណើបច្ចុប្បន្នបញ្ចប់។"
 system.resuming_session: "កំពុងបន្តវគ្គ %{session_id}..."
 system.unknown_command: "មិនស្គាល់ពាក្យបញ្ជា \"%{command}\" — បានផ្ញើជាសំណើ។ វាយ /help ដើម្បីមើលបញ្ជី។"  # {Locked="/help"}

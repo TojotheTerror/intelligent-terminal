@@ -127,6 +127,9 @@ system.cancelled: "Chinkachisqa."
 system.no_prompt_in_flight: "Mana tapukuy purichkanchu."
 system.authentication_failed: "Yaykuy mana allinchu"
 system.command_copied_retry: "Kamachiy apasqa — huk terminal nisqapi purichiy, chaymanta Enter nit'iy watiqmanta qallarinapaq"  # {Locked="Enter"}
+system.stopped_max_tokens: "Kutichiyqa kuchurqakun modelopa lluqsiynin sayaynin chayasqan qhipata."
+system.stopped_max_turn_requests: "Agenteqa sayarqan kay kutipi mañakuy sayaynin chayasqan qhipata."
+system.stopped_refusal: "Agenteqa kay mañakuyta qatiyta mana munarqanchu."
 system.agent_busy: "Kay tab nisqapi Agent llamk'achkan — kunan prompt tukukunankama suyay."
 system.resuming_session: "Sesión %{session_id} kutichispa..."
 system.unknown_command: "Mana riqsisqa kamachiy \"%{command}\" — prompt hina apachisqa. Lista rikunaykipaq /help qillqay."  # {Locked="/help"} — slash-command name.

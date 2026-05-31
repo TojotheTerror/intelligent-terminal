@@ -134,6 +134,9 @@ system.cancelled: "Отказано."
 system.no_prompt_in_flight: "Нема активног захтјева."
 system.authentication_failed: "Аутентификација није успјела"
 system.command_copied_retry: "Команда је копирана — покрените је у другом терминалу, затим притисните Enter за поновни покушај"  # {Locked="Enter"}
+system.stopped_max_tokens: "Одговор је одсечен након достизања излазног ограничења модела."
+system.stopped_max_turn_requests: "Агент се зауставио након достизања ограничења захтева за овај потез."
+system.stopped_refusal: "Агент је одбио да настави са овим захтевом."
 system.agent_busy: "Агент је заузет на овој картици — сачекајте да се тренутни упит заврши."
 system.resuming_session: "Наставља се сесија %{session_id}..."
 system.unknown_command: "Непозната команда \"%{command}\" — послата као упит. Унесите /help за списак."  # {Locked="/help"}

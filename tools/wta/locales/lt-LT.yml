@@ -127,6 +127,9 @@ system.cancelled: "Atšaukta."
 system.no_prompt_in_flight: "Nėra vykdomos užklausos."
 system.authentication_failed: "Autentifikavimas nepavyko"
 system.command_copied_retry: "Komanda nukopijuota — paleiskite ją kitame terminale, tada paspauskite Enter, kad bandytumėte iš naujo"  # {Locked="Enter"}
+system.stopped_max_tokens: "Atsakymas buvo nutrauktas pasiekus modelio išvesties ribą."
+system.stopped_max_turn_requests: "Agentas sustojo pasiekęs šio ėjimo užklausų ribą."
+system.stopped_refusal: "Agentas atsisakė tęsti šią užklausą."
 system.agent_busy: "Agentas šiame skirtuke užimtas — palaukite, kol dabartinė užklausa bus baigta."
 system.resuming_session: "Tęsiamas seansas %{session_id}..."
 system.unknown_command: "Nežinoma komanda \"%{command}\" — išsiųsta kaip užklausa. Sąrašui įveskite /help."  # {Locked="/help"}

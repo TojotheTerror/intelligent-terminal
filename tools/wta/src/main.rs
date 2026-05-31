@@ -2211,6 +2211,12 @@ async fn run_acp_app(
             };
             let (master_ext_tx, master_ext_rx) = tokio::sync::mpsc::unbounded_channel();
 
+            // Seed the process-wide owner tab StableId so `inject_wta_pane_meta`
+            // stamps `_meta.wta.owner_tab_id` on every session/new + session/load.
+            // Master needs it to address `restart_agent_pane` crash-recovery
+            // events by the same StableId C++ routes per-tab events with.
+            protocol::acp::client::set_helper_owner_tab_id(cli.owner_tab_id.as_deref());
+
             // Spawn the ACP client -- but not in setup mode, where the user
             // hasn't chosen an agent yet. Store params for deferred start.
             //
@@ -2252,15 +2258,19 @@ async fn run_acp_app(
                             error = %e,
                             "run_acp_client_over_pipe failed"
                         );
-                        // Pass the error through verbatim. Don't classify on
-                        // substrings here — keyword matching is fragile and (as a
-                        // reviewer caught) would swallow auth failures like
-                        // `new_session over master pipe failed: authentication
-                        // required`, which must reach AgentError with its marker
-                        // intact so the handler routes it to the sign-in screen.
-                        // The raw `{e:#}` is also in the log above for diagnosis.
+                        // Recover the typed classification: an auth error
+                        // attached at the handshake `new_session` site survives
+                        // the `?`-collapse into `anyhow` via downcast, so it
+                        // still routes to the sign-in screen; other handshake
+                        // failures fall back to `HandshakeFailed`. The raw
+                        // `{e:#}` is also in the log above for diagnosis.
+                        let failure = protocol::acp::failure::classify_anyhow(
+                            &e,
+                            protocol::acp::failure::HandshakeStage::Initialize,
+                        );
                         let _ = event_tx_for_pipe.send(app::AppEvent::AgentError {
                             session_id: None,
+                            failure,
                             message: format!("helper ACP transport failed: {e:#}"),
                         });
                     }

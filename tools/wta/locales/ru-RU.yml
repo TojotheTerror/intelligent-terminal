@@ -134,6 +134,9 @@ system.cancelled: "Отменено."
 system.no_prompt_in_flight: "Нет активного запроса."
 system.authentication_failed: "Ошибка аутентификации"
 system.command_copied_retry: "Команда скопирована — выполните её в другом терминале, затем нажмите Enter для повтора"  # {Locked="Enter"}
+system.stopped_max_tokens: "Ответ был обрезан после достижения предела вывода модели."
+system.stopped_max_turn_requests: "Агент остановился после достижения лимита запросов для этого хода."
+system.stopped_refusal: "Агент отказался продолжать выполнение этого запроса."
 system.agent_busy: "Агент занят на этой вкладке — дождитесь завершения текущего запроса."
 system.resuming_session: "Возобновление сеанса %{session_id}..."
 system.unknown_command: "Неизвестная команда \"%{command}\" — отправлена как запрос. Введите /help, чтобы увидеть список."  # {Locked="/help"}

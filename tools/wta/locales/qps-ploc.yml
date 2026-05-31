@@ -59,7 +59,7 @@ chat.turn_executed: "[→ éẋéçûţéð: %{title}!!]"
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "[Àśķ åñÿţĥïñğ, / ƒöŕ çöḿḿåñďś..!!!! !!!!]"  # {Locked="/"}
 input.placeholder.connecting: "[çöññéçţïñğ...!!]"
-input.placeholder.disconnected: "[ďïśçöññéçţ!!]"
+input.placeholder.disconnected: "[ďïśçöññéçţéď!!]"
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -129,6 +129,9 @@ system.cancelled: "[Çåñçéĺĺéď.!!]"
 system.no_prompt_in_flight: "[Ñö ṗŕöḿṗţ ïñ ƒĺïğĥţ.!!!! !!!!]"
 system.authentication_failed: "[Àûţĥéñţïçåţïöñ ƒåïĺéď!!!! !!!!]"
 system.command_copied_retry: "[Çöḿḿåñď çöṗïéď — ŕûñ ïţ ïñ åñöţĥéŕ ţéŕḿïñåĺ, ţĥéñ ṗŕéśś Enter ţö ŕéţŕÿ!!!! !!!! !!!! !!!! !!!!]"  # {Locked="Enter"}
+system.stopped_max_tokens: "[Ţĥé ŕéśṗöñśé ŵåś çûţ öƒƒ åƒţéŕ ŕéåçĥïñǧ ţĥé ḿöďéĺ'ś öûţṗûţ ĺïḿïţ.!!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!!]"
+system.stopped_max_turn_requests: "[Ţĥé åǧéñţ śţöṗṗéď åƒţéŕ ŕéåçĥïñǧ ïţś ŕéqûéśţ ĺïḿïţ ƒöŕ ţĥïś ţûŕñ.!!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!!]"
+system.stopped_refusal: "[Ţĥé åǧéñţ ďéçĺïñéď ţö çöñţïñûé ŵïţĥ ţĥïś ŕéqûéśţ.!!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!! !!!!]"
 system.agent_busy: "[Àğéñţ ïś ƀûśÿ öñ ţĥïś ţåƀ — ŵåïţ ƒöŕ ţĥé çûŕŕéñţ ṗŕöḿṗţ ţö ƒïñïśĥ.!!!! !!!! !!!! !!!! !!!!]"
 system.resuming_session: "[Ŕéśûḿïñğ śéśśïöñ %{session_id}...!!!! !!!!]"
 system.unknown_command: "[Ûñķñöŵñ çöḿḿåñď \"%{command}\" — śéñţ åś ṗŕöḿṗţ. Ţÿṗé /help ƒöŕ ţĥé ĺïśţ.!!!! !!!! !!!! !!!! !!!!]"  # {Locked="/help"}

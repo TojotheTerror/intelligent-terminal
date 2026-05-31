@@ -138,6 +138,9 @@ system.cancelled: "Ləğv edildi."
 system.no_prompt_in_flight: "İcra olunan sorğu yoxdur."
 system.authentication_failed: "Kimlik doğrulaması uğursuz oldu"
 system.command_copied_retry: "Əmr kopyalandı — başqa terminalda icra edin, sonra yenidən sınamaq üçün Enter basın"  # {Locked="Enter"}
+system.stopped_max_tokens: "Cavab modelin çıxış həddinə çatdıqdan sonra kəsildi."
+system.stopped_max_turn_requests: "Agent bu növbə üçün sorğu həddinə çatdıqdan sonra dayandı."
+system.stopped_refusal: "Agent bu sorğunu davam etdirməkdən imtina etdi."
 system.agent_busy: "Agent bu tabda məşğuldur — cari sorğunun tamamlanmasını gözləyin."
 system.resuming_session: "Sessiya %{session_id} bərpa olunur..."
 system.unknown_command: "Naməlum əmr \"%{command}\" — sorğu kimi göndərildi. Siyahı üçün /help yazın."  # {Locked="/help"}

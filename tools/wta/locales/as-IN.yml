@@ -138,6 +138,9 @@ system.cancelled: "বাতিল কৰা হৈছে।"
 system.no_prompt_in_flight: "প্ৰগতিত কোনো প্ৰমপ্ট নাই।"
 system.authentication_failed: "প্ৰমাণীকৰণ বিফল"
 system.command_copied_retry: "কমাণ্ড কপি কৰা হৈছে — ইয়াক আন এটা টাৰ্মিনেলত চলাওক, তাৰ পিছত পুনৰ চেষ্টাৰ বাবে Enter টিপক"  # {Locked="Enter"}
+system.stopped_max_tokens: "মডেলৰ আউটপুট সীমাত উপনীত হোৱাৰ পিছত প্ৰতিক্ৰিয়াটো কাটি পেলোৱা হ’ল।"
+system.stopped_max_turn_requests: "এই পালিৰ বাবে অনুৰোধ সীমাত উপনীত হোৱাৰ পিছত এজেণ্টটো বন্ধ হ’ল।"
+system.stopped_refusal: "এজেণ্টে এই অনুৰোধটো আগবঢ়াই নিয়াত অমান্তি হ’ল।"
 system.agent_busy: "এই টেবত Agent ব্যস্ত — বৰ্তমানৰ প্ৰম্প্ট শেষ হোৱালৈ অপেক্ষা কৰক।"
 system.resuming_session: "সত্ৰ %{session_id} পুনৰাৰম্ভ কৰা হৈছে..."
 system.unknown_command: "অজানা কমাণ্ড \"%{command}\" — প্ৰম্প্ট হিচাপে পঠিওৱা হ'ল। তালিকাৰ বাবে /help টাইপ কৰক।"  # {Locked="/help"} — slash-command name.

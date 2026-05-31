@@ -123,6 +123,9 @@ system.cancelled: "キャンセルされました。"
 system.no_prompt_in_flight: "進行中のプロンプトはありません。"
 system.authentication_failed: "認証に失敗しました"
 system.command_copied_retry: "コマンドをコピーしました — 別のターミナルで実行し、Enter を押して再試行してください"  # {Locked="Enter"}
+system.stopped_max_tokens: "モデルの出力上限に達したため、応答が途中で打ち切られました。"
+system.stopped_max_turn_requests: "このターンの要求上限に達したため、エージェントが停止しました。"
+system.stopped_refusal: "エージェントはこの要求の続行を拒否しました。"
 system.agent_busy: "このタブではエージェントが処理中です — 現在のプロンプトが完了するまでお待ちください。"
 system.resuming_session: "セッション %{session_id} を再開しています..."
 system.unknown_command: "不明なコマンド \"%{command}\" — プロンプトとして送信しました。一覧を表示するには /help と入力してください。"  # {Locked="/help"}

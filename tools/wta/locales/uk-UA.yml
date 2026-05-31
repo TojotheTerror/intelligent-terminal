@@ -134,6 +134,9 @@ system.cancelled: "Скасовано."
 system.no_prompt_in_flight: "Немає активного запиту."
 system.authentication_failed: "Помилка автентифікації"
 system.command_copied_retry: "Команду скопійовано — виконайте її в іншому терміналі, потім натисніть Enter для повтору"  # {Locked="Enter"}
+system.stopped_max_tokens: "Відповідь було обрізано після досягнення ліміту виводу моделі."
+system.stopped_max_turn_requests: "Агент зупинився після досягнення ліміту запитів для цього ходу."
+system.stopped_refusal: "Агент відмовився продовжувати цей запит."
 system.agent_busy: "Агент зайнятий на цій вкладці — дочекайтеся завершення поточного запиту."
 system.resuming_session: "Відновлення сеансу %{session_id}..."
 system.unknown_command: "Невідома команда \"%{command}\" — надіслано як запит. Введіть /help, щоб переглянути список."  # {Locked="/help"}

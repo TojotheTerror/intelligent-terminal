@@ -138,6 +138,9 @@ system.cancelled: "لغو شد."
 system.no_prompt_in_flight: "هیچ درخواستی در حال اجرا نیست."
 system.authentication_failed: "احراز هویت ناموفق بود"
 system.command_copied_retry: "دستور کپی شد — آن را در ترمینال دیگری اجرا کنید، سپس Enter را برای تلاش مجدد فشار دهید"  # {Locked="Enter"}
+system.stopped_max_tokens: "پاسخ پس از رسیدن به حد خروجی مدل قطع شد."
+system.stopped_max_turn_requests: "عامل پس از رسیدن به حد درخواست خود برای این نوبت متوقف شد."
+system.stopped_refusal: "عامل از ادامه‌دادن این درخواست خودداری کرد."
 system.agent_busy: "عامل در این زبانه مشغول است — منتظر بمانید تا درخواست فعلی تمام شود."
 system.resuming_session: "در حال ازسرگیری جلسه %{session_id}..."
 system.unknown_command: "فرمان ناشناخته \"%{command}\" — به‌عنوان درخواست ارسال شد. برای فهرست، /help را تایپ کنید."  # {Locked="/help"} — slash-command name.

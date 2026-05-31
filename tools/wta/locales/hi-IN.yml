@@ -138,6 +138,9 @@ system.cancelled: "रद्द किया गया।"
 system.no_prompt_in_flight: "कोई प्रॉम्प्ट प्रगति में नहीं है।"
 system.authentication_failed: "प्रमाणीकरण विफल"
 system.command_copied_retry: "कमांड कॉपी किया गया — इसे किसी अन्य टर्मिनल में चलाएँ, फिर पुनः प्रयास के लिए Enter दबाएँ"  # {Locked="Enter"}
+system.stopped_max_tokens: "मॉडल की आउटपुट सीमा तक पहुँचने के बाद प्रतिक्रिया काट दी गई।"
+system.stopped_max_turn_requests: "इस बारी के लिए अपनी अनुरोध सीमा तक पहुँचने के बाद एजेंट रुक गया।"
+system.stopped_refusal: "एजेंट ने इस अनुरोध को जारी रखने से इनकार कर दिया।"
 system.agent_busy: "इस टैब पर Agent व्यस्त है — वर्तमान प्रॉम्प्ट समाप्त होने तक प्रतीक्षा करें।"
 system.resuming_session: "सत्र %{session_id} फिर से शुरू किया जा रहा है..."
 system.unknown_command: "अज्ञात कमांड \"%{command}\" — प्रॉम्प्ट के रूप में भेजा गया। सूची के लिए /help लिखें।"  # {Locked="/help"} — slash-command name.

@@ -127,6 +127,9 @@ system.cancelled: "ยกเลิกแล้ว"
 system.no_prompt_in_flight: "ไม่มีพร้อมท์ที่กำลังดำเนินการ"
 system.authentication_failed: "การยืนยันตัวตนล้มเหลว"
 system.command_copied_retry: "คัดลอกคำสั่งแล้ว — เรียกใช้ในเทอร์มินัลอื่น แล้วกด Enter เพื่อลองอีกครั้ง"  # {Locked="Enter"}
+system.stopped_max_tokens: "การตอบกลับถูกตัดออกหลังจากถึงขีดจำกัดเอาต์พุตของโมเดล"
+system.stopped_max_turn_requests: "เอเจนต์หยุดลงหลังจากถึงขีดจำกัดคำขอสำหรับเทิร์นนี้"
+system.stopped_refusal: "เอเจนต์ปฏิเสธที่จะดำเนินการคำขอนี้ต่อ"
 system.agent_busy: "เอเจนต์กำลังทำงานอยู่ในแท็บนี้ — รอให้พรอมต์ปัจจุบันเสร็จก่อน"
 system.resuming_session: "กำลังดำเนินเซสชัน %{session_id} ต่อ..."
 system.unknown_command: "ไม่รู้จักคำสั่ง \"%{command}\" — ส่งเป็นพรอมต์แล้ว พิมพ์ /help เพื่อดูรายการ"  # {Locked="/help"}

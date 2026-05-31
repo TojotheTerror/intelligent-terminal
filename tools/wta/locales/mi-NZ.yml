@@ -127,6 +127,9 @@ system.cancelled: "Kua whakakorea."
 system.no_prompt_in_flight: "Karekau he tohutohu e rere ana."
 system.authentication_failed: "I rahua te whakamanatu"
 system.command_copied_retry: "Kua tarua te whakahau — whakahautia i tetahi atu teirminara, katahi ka pehi Enter ki te ngana ano"  # {Locked="Enter"}
+system.stopped_max_tokens: "I tapahia te whakautu i muri i te tutukinga o te tepe putanga o te tauira."
+system.stopped_max_turn_requests: "I mutu te kaihoko i muri i te tutukinga o tana tepe tono mō tēnei huri."
+system.stopped_refusal: "I whakakāhore te kaihoko ki te haere tonu me tēnei tono."
 system.agent_busy: "Kei te pukumahi te agent i tēnei ripa — tatari kia mutu te prompt onāianei."
 system.resuming_session: "Kei te tīmata anō te wāhanga %{session_id}..."
 system.unknown_command: "He command kāore e mōhiotia \"%{command}\" — kua tukuna hei prompt. Patohia /help mō te rārangi."  # {Locked="/help"}

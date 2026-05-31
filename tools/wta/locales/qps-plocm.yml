@@ -57,7 +57,7 @@ chat.turn_executed: "[!! → execu_ted: %{title} !!]"
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "[!! Ask_ anything, / for commands.. !!]"  # {Locked="/"}
 input.placeholder.connecting: "[!! con_necting... !!]"
-input.placeholder.disconnected: "[!! dis_connect !!]"
+input.placeholder.disconnected: "[!! dis_connected !!]"
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -127,6 +127,9 @@ system.cancelled: "[!! Can_celled. !!]"
 system.no_prompt_in_flight: "[!! No_ prompt in flight. !!]"
 system.authentication_failed: "[!! Aut_hentication failed !!]"
 system.command_copied_retry: "[!! Com_mand copied — run it in another terminal, then press Enter to retry !!]"  # {Locked="Enter"}
+system.stopped_max_tokens: "[!! The_ response was cut off after reaching the model's output limit. !!]"
+system.stopped_max_turn_requests: "[!! The_ agent stopped after reaching its request limit for this turn. !!]"
+system.stopped_refusal: "[!! The_ agent declined to continue with this request. !!]"
 system.agent_busy: "[!! Age_nt is busy on this tab — wait for the current prompt to finish. !!]"
 system.resuming_session: "[!! Res_uming session %{session_id}... !!]"
 system.unknown_command: "[!! Unk_nown command \"%{command}\" — sent as prompt. Type /help for the list. !!]"  # {Locked="/help"}
