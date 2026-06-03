@@ -73,7 +73,7 @@ pub fn resolve_sessions_origin_filter() -> crate::agent_sessions::OriginFilter {
     }
 }
 
-use crate::commands::{self, CommandKind, CommandSpec, ParsedCommand};
+use crate::commands::{self, CommandKind, CommandSpec, ParseOutcome, ParsedCommand};
 use crate::coordinator::{
     parse_autofix_response, parse_recommendation_set, recommended_choice_index,
     validate_recommendation_set_for_coordinator_target, AutofixDecision, RecommendationChoice,
@@ -6255,21 +6255,6 @@ impl App {
                     self.current_tab_mut().insert_input_char('\n');
                 }
             }
-            KeyCode::Enter if self.command_popup_visible() => {
-                // Popup is showing — Enter runs the highlighted command
-                // (/, /h, /he etc. → /help) instead of committing the
-                // raw text as a prompt. Esc dismisses if the user
-                // doesn't want any command.
-                if let Some(spec) = self.current_tab().selected_command_spec() {
-                    let parsed = ParsedCommand {
-                        kind: spec.kind,
-                        spec,
-                        rest: String::new(),
-                    };
-                    self.current_tab_mut().clear_input();
-                    self.handle_slash_command(parsed);
-                }
-            }
             KeyCode::Enter
                 if self.current_tab().input.is_empty()
                     && self.current_tab().selected_completed_turn_idx.is_some()
@@ -6280,45 +6265,17 @@ impl App {
                 self.current_tab_mut().toggle_selected_completed_turn();
             }
             KeyCode::Enter => {
+                // Slash-command intercept (popup selection, known command, or
+                // unknown-command warning). Runs before the prompt path so
+                // commands like /stop work even mid-flight, and /help / /clear
+                // work even when the agent isn't Connected. Returns true when
+                // the keystroke was consumed; an unknown command only warns and
+                // falls through so the raw line still goes to the agent.
+                if self.try_handle_slash_on_enter() {
+                    return;
+                }
                 let _tab = self.current_tab();
                 tracing::debug!(target: "autofix", input_empty = _tab.input.is_empty(), state = ?self.state, has_recs = _tab.turn.recommendations().is_some(), autofix_pane = ?_tab.autofix.pane_id, selected_idx = _tab.selected_recommendation, "Enter");
-                // Slash-command intercept. Runs before the prompt path so
-                // commands like /stop work even mid-flight, and /help / /clear
-                // / /exit work even when the agent isn't Connected.
-                //
-                // `//literal` falls through to the prompt path (parse() returns
-                // None), and the leading `/` is left intact — the agent sees
-                // exactly what the user typed.
-                if !self.current_tab().input.is_empty() {
-                    if let Some(cmd) = commands::parse(&self.current_tab().input) {
-                        self.current_tab_mut().clear_input();
-                        self.handle_slash_command(cmd);
-                        return;
-                    } else if self.current_tab().input.trim_start().starts_with('/')
-                        && !self.current_tab().input.trim_start().starts_with("//")
-                    {
-                        // Looks like an attempted command but the name isn't
-                        // registered: warn the user but still send the line as
-                        // a prompt so they don't lose what they typed.
-                        let unknown = self
-                            .current_tab()
-                            .input
-                            .trim_start()
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("/")
-                            .to_string();
-                        let tab = self.current_tab_mut();
-                        tab.messages.push(ChatMessage::System(
-                            t!(
-                                "system.unknown_command",
-                                command = unknown.as_str()
-                            )
-                            .into_owned(),
-                        ));
-                        // Fall through to the prompt path below.
-                    }
-                }
                 if self.current_tab().input.is_empty()
                     && self.state == ConnectionState::Connected
                     && self.current_tab().turn.recommendations().is_some()
@@ -6531,6 +6488,59 @@ impl App {
         self.current_tab().command_popup_visible()
     }
 
+    /// Handle Enter for the slash-command system. Centralizes all three
+    /// intents in one place so the giant `handle_key` match has a single
+    /// guard instead of an inline block plus a separate popup arm:
+    ///
+    /// 1. Autocomplete popup open → run the highlighted command.
+    /// 2. No popup → [`commands::classify`] the committed line:
+    ///    - known command → dispatch it,
+    ///    - unknown `/foo` → warn but leave the input for the prompt path,
+    ///    - plain prompt → do nothing.
+    ///
+    /// Returns `true` when the keystroke is fully consumed (a command ran or
+    /// the popup swallowed Enter); `false` means the caller should continue to
+    /// the normal prompt-submission path with the input intact.
+    fn try_handle_slash_on_enter(&mut self) -> bool {
+        // 1. Popup open: Enter commits the highlighted command (`/`, `/h`,
+        //    `/he` → /help) and never submits the raw text as a prompt, so
+        //    this arm is always consumed even if there is no selection.
+        if self.command_popup_visible() {
+            if let Some(spec) = self.current_tab().selected_command_spec() {
+                let parsed = ParsedCommand {
+                    kind: spec.kind,
+                    spec,
+                    rest: String::new(),
+                };
+                self.current_tab_mut().clear_input();
+                self.handle_slash_command(parsed);
+            }
+            return true;
+        }
+
+        // 2. No popup: classify the committed line.
+        if self.current_tab().input.is_empty() {
+            return false;
+        }
+        match commands::classify(&self.current_tab().input) {
+            ParseOutcome::Command(cmd) => {
+                self.current_tab_mut().clear_input();
+                self.handle_slash_command(cmd);
+                true
+            }
+            ParseOutcome::Unknown(name) => {
+                // Warn but fall through: the raw line (leading `/` intact) is
+                // still sent so the user doesn't lose what they typed.
+                let tab = self.current_tab_mut();
+                tab.messages.push(ChatMessage::System(
+                    t!("system.unknown_command", command = name.as_str()).into_owned(),
+                ));
+                false
+            }
+            ParseOutcome::NotCommand => false,
+        }
+    }
+
     /// Dispatch a parsed slash-command. The Enter handler is responsible
     /// for clearing the input and cursor before calling this.
     fn handle_slash_command(&mut self, cmd: ParsedCommand) {
@@ -6542,107 +6552,131 @@ impl App {
             "dispatch"
         );
 
+        // Thin dispatch: each arm's logic lives in a `cmd_*` method so a
+        // single command can be read and unit-tested in isolation. `in_flight`
+        // is computed once here and threaded to the commands that branch on it.
         match cmd.kind {
-            CommandKind::Help => {
-                self.help_overlay_visible = !self.help_overlay_visible;
-            }
-            CommandKind::Clear => {
-                let tab = self.current_tab_mut();
-                tab.clear_chat_history();
-                tab.completed_turns.clear();
-                tab.selected_completed_turn_idx = None;
-                tab.scroll_to_bottom();
-            }
-            CommandKind::Stop => {
-                if in_flight {
-                    let session_id = self.current_tab().session_id.clone();
-                    if let Some(sid) = session_id.clone() {
-                        let _ = self.cancel_tx.send(CancelRequest { session_id: sid });
-                    }
-                    if let Some(sid) = session_id {
-                        self.turn_cancel(&sid);
-                    }
-                    let tab = self.current_tab_mut();
-                    tab.messages
-                        .push(ChatMessage::System(t!("system.cancelled").into_owned()));
-                    tab.scroll_to_bottom();
-                } else {
-                    let tab = self.current_tab_mut();
-                    tab.messages.push(ChatMessage::System(
-                        t!("system.no_prompt_in_flight").into_owned(),
-                    ));
-                    tab.scroll_to_bottom();
-                }
-            }
-            CommandKind::New => {
-                if in_flight {
-                    let tab = self.current_tab_mut();
-                    tab.messages.push(ChatMessage::System(
-                        t!("system.busy_use_stop").into_owned(),
-                    ));
-                    tab.scroll_to_bottom();
-                    return;
-                }
-                let tab_id = self
-                    .tab_id
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
-                let _ = self
-                    .new_session_tx
-                    .send(NewSessionForTab { tab_id, cwd: None });
-                let tab = self.current_tab_mut();
-                tab.clear_chat_history();
-                tab.completed_turns.clear();
-                tab.selected_completed_turn_idx = None;
-                tab.session_id = None;
-                tab.scroll_to_bottom();
-            }
-            CommandKind::Sessions => {
-                // Mirror the Ctrl+Shift+/ keybinding's open path: jump straight to
-                // the Agents picker and seed a selection so Enter/Up/Down
-                // are immediately useful. Esc / Ctrl+Shift+/ still close the view.
-                // Per-tab — only flips the active tab's view state.
-                let tab_id = self.active_tab_key().to_string();
-                self.open_agents_view_for_tab(tab_id);
-                // session management path also kicks the lazy history scan here. Without this,
-                // /sessions left the registry empty and rendered a blank view
-                // forever (state stuck at NotStarted, no Loading row, no rows).
-                self.ensure_history_loaded();
-                self.project_active_tab_state();
-            }
-            CommandKind::Restart => {
-                // Behavior depends on which transport this App is running on:
-                //
-                // * Standalone mode: the ACP client owns the agent CLI child.
-                //   `restart_tx` triggers an in-process tear-down + respawn;
-                //   subsequent prompts get a fresh session on each tab. The
-                //   `Connecting("Restarting agent...")` state lasts until the
-                //   new `initialize` round-trip lands.
-                //
-                // * Helper mode: master owns the agent CLI lifetime, so a
-                //   single helper cannot restart it in-process. The helper's
-                //   `restart_rx` arm asks the C++ side to force-restart the
-                //   whole agent stack (`restart_agent_stack` SendEvent →
-                //   TerminalPage tears down every agent pane,
-                //   `SharedWta::Restart` respawns master on the same stable
-                //   pipe name, then the active tab's pane is re-opened). The
-                //   user briefly sees the agent pane flash closed and reopen
-                //   with a clean session. The `Connecting("Restarting...")`
-                //   state set below is short-lived — this helper process is
-                //   on its way out as part of the pane teardown.
-                self.state = ConnectionState::Connecting("Restarting agent...".to_string());
-                self.session_to_tab.clear();
-                self.session_id.clear();
-                for (_, tab) in self.tab_sessions.iter_mut() {
-                    tab.clear_chat_history();
-                    tab.completed_turns.clear();
-                    tab.selected_completed_turn_idx = None;
-                    tab.session_id = None;
-                }
-                let _ = self.restart_tx.send(RestartRequest { agent_cmd: None });
-                self.publish_agent_status();
-            }
+            CommandKind::Help => self.cmd_help(),
+            CommandKind::Clear => self.cmd_clear(),
+            CommandKind::Stop => self.cmd_stop(in_flight),
+            CommandKind::New => self.cmd_new(in_flight),
+            CommandKind::Sessions => self.cmd_sessions(),
+            CommandKind::Restart => self.cmd_restart(),
         }
+    }
+
+    /// `/help` — toggle the help overlay.
+    fn cmd_help(&mut self) {
+        self.help_overlay_visible = !self.help_overlay_visible;
+    }
+
+    /// `/clear` — wipe the active tab's chat history and completed turns.
+    fn cmd_clear(&mut self) {
+        let tab = self.current_tab_mut();
+        tab.clear_chat_history();
+        tab.completed_turns.clear();
+        tab.selected_completed_turn_idx = None;
+        tab.scroll_to_bottom();
+    }
+
+    /// `/stop` — cancel the in-flight turn, or note that there is nothing to
+    /// stop. `in_flight` is the active tab's turn state, captured by the
+    /// dispatcher before any mutation.
+    fn cmd_stop(&mut self, in_flight: bool) {
+        if in_flight {
+            let session_id = self.current_tab().session_id.clone();
+            if let Some(sid) = session_id.clone() {
+                let _ = self.cancel_tx.send(CancelRequest { session_id: sid });
+            }
+            if let Some(sid) = session_id {
+                self.turn_cancel(&sid);
+            }
+            let tab = self.current_tab_mut();
+            tab.messages
+                .push(ChatMessage::System(t!("system.cancelled").into_owned()));
+            tab.scroll_to_bottom();
+        } else {
+            let tab = self.current_tab_mut();
+            tab.messages.push(ChatMessage::System(
+                t!("system.no_prompt_in_flight").into_owned(),
+            ));
+            tab.scroll_to_bottom();
+        }
+    }
+
+    /// `/new` — start a fresh session on the active tab. Refuses while a turn
+    /// is in flight (the user should `/stop` first).
+    fn cmd_new(&mut self, in_flight: bool) {
+        if in_flight {
+            let tab = self.current_tab_mut();
+            tab.messages.push(ChatMessage::System(
+                t!("system.busy_use_stop").into_owned(),
+            ));
+            tab.scroll_to_bottom();
+            return;
+        }
+        let tab_id = self
+            .tab_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
+        let _ = self
+            .new_session_tx
+            .send(NewSessionForTab { tab_id, cwd: None });
+        let tab = self.current_tab_mut();
+        tab.clear_chat_history();
+        tab.completed_turns.clear();
+        tab.selected_completed_turn_idx = None;
+        tab.session_id = None;
+        tab.scroll_to_bottom();
+    }
+
+    /// `/sessions` — open the Agents picker for the active tab.
+    fn cmd_sessions(&mut self) {
+        // Mirror the Ctrl+Shift+/ keybinding's open path: jump straight to
+        // the Agents picker and seed a selection so Enter/Up/Down
+        // are immediately useful. Esc / Ctrl+Shift+/ still close the view.
+        // Per-tab — only flips the active tab's view state.
+        let tab_id = self.active_tab_key().to_string();
+        self.open_agents_view_for_tab(tab_id);
+        // session management path also kicks the lazy history scan here. Without this,
+        // /sessions left the registry empty and rendered a blank view
+        // forever (state stuck at NotStarted, no Loading row, no rows).
+        self.ensure_history_loaded();
+        self.project_active_tab_state();
+    }
+
+    /// `/restart` — reset the agent CLI subprocess. Behavior depends on which
+    /// transport this App is running on:
+    ///
+    /// * Standalone mode: the ACP client owns the agent CLI child.
+    ///   `restart_tx` triggers an in-process tear-down + respawn;
+    ///   subsequent prompts get a fresh session on each tab. The
+    ///   `Connecting("Restarting agent...")` state lasts until the
+    ///   new `initialize` round-trip lands.
+    ///
+    /// * Helper mode: master owns the agent CLI lifetime, so a
+    ///   single helper cannot restart it in-process. The helper's
+    ///   `restart_rx` arm asks the C++ side to force-restart the
+    ///   whole agent stack (`restart_agent_stack` SendEvent →
+    ///   TerminalPage tears down every agent pane,
+    ///   `SharedWta::Restart` respawns master on the same stable
+    ///   pipe name, then the active tab's pane is re-opened). The
+    ///   user briefly sees the agent pane flash closed and reopen
+    ///   with a clean session. The `Connecting("Restarting...")`
+    ///   state set below is short-lived — this helper process is
+    ///   on its way out as part of the pane teardown.
+    fn cmd_restart(&mut self) {
+        self.state = ConnectionState::Connecting("Restarting agent...".to_string());
+        self.session_to_tab.clear();
+        self.session_id.clear();
+        for (_, tab) in self.tab_sessions.iter_mut() {
+            tab.clear_chat_history();
+            tab.completed_turns.clear();
+            tab.selected_completed_turn_idx = None;
+            tab.session_id = None;
+        }
+        let _ = self.restart_tx.send(RestartRequest { agent_cmd: None });
+        self.publish_agent_status();
     }
 
     /// Width of the main area (chat / recs / perm / input) — matches the
@@ -8585,6 +8619,13 @@ fn prev_word_boundary(input: &str, cursor_pos: usize) -> usize {
     i
 }
 
+// Slash-command behavior tests live in their own file. Declared as a child
+// of `app` (not the crate root) so they can reach `App`'s private dispatch
+// methods, and `#[path]` keeps the file flat in `src/` like the rest.
+#[cfg(test)]
+#[path = "slash_command_tests.rs"]
+mod slash_command_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8627,7 +8668,9 @@ mod tests {
     }
 
     // Helper to create an App for testing (avoids needing real channels for simple state tests).
-    fn test_app() -> App {
+    // `pub(super)` so the sibling `slash_command_tests` module (see the
+    // `#[path]` mod in app.rs) can reuse it instead of duplicating App::new.
+    pub(super) fn test_app() -> App {
         let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::unbounded_channel();
         let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
         let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
