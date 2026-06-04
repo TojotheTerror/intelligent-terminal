@@ -358,36 +358,16 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        // Auto-suggest toggle hot-reload: when the effective auto-fix
-        // value changes between settings reloads, push the new value
-        // to WTA over the protocol. Tracks `EffectiveAutoFixEnabled`
-        // (not the raw user pref) so GPO Forced/Blocked transitions
-        // also propagate. WTA's `autofix_enabled` flag would
-        // otherwise stay pinned to whatever `--no-autofix` value it
-        // was launched with.
-        {
-            const bool currentAutoFix = _settings.GlobalSettings().EffectiveAutoFixEnabled();
-            if (!_autoFixEnabledSnapshotInitialized)
-            {
-                _lastAutoFixEnabled = currentAutoFix;
-                _autoFixEnabledSnapshotInitialized = true;
-            }
-            else if (_lastAutoFixEnabled != currentAutoFix)
-            {
-                _lastAutoFixEnabled = currentAutoFix;
-                Json::Value evt;
-                evt["type"] = "event";
-                evt["method"] = "autofix_enabled_changed";
-                Json::Value params;
-                params["enabled"] = currentAutoFix;
-                evt["params"] = params;
-                Json::StreamWriterBuilder wb;
-                wb["indentation"] = "";
-                ProtocolVtSequenceReceived.raise(
-                    *this,
-                    winrt::to_hstring(Json::writeString(wb, evt)));
-            }
-        }
+        // Hot-reload of runtime agent config (autofix gate, acp-model,
+        // delegate agent/model). When any of these change between settings
+        // reloads we push a single consolidated `agent_config_changed`
+        // event to the running wta-helper(s) so they update in place,
+        // WITHOUT tearing down and restarting the agent pane. This is the
+        // unified dispatch for every hot-updatable agent setting — adding a
+        // new one means adding a field to AgentRuntimeConfigSnapshot, not a
+        // bespoke diff/emit block here. (Agent *identity* changes still go
+        // through _RebuildAgentStack in _RefreshUIForSettingsReload.)
+        _EmitAgentRuntimeConfigIfChanged();
 
         // Make sure to call SetCommands before _RefreshUIForSettingsReload.
         // SetCommands will make sure the KeyChordText of Commands is updated, which needs
@@ -1385,12 +1365,98 @@ namespace winrt::TerminalApp::implementation
 
     bool TerminalPage::_AgentSettingsChanged(const AgentSettingsSnapshot& a, const AgentSettingsSnapshot& b)
     {
+        // Only the agent-CLI *identity* (which binary + agent-id) forces a
+        // master respawn. acp-model and the delegate-* fields are hot-updated
+        // over the protocol by _EmitAgentRuntimeConfigIfChanged and must NOT
+        // trigger a teardown/rebuild here — that was the bug where changing
+        // the delegate agent restarted the whole agent pane connection.
         return a.acpAgent != b.acpAgent ||
-               a.acpModel != b.acpModel ||
-               a.acpCustomCommand != b.acpCustomCommand ||
-               a.delegateAgent != b.delegateAgent ||
-               a.delegateModel != b.delegateModel ||
-               a.delegateCustomCommand != b.delegateCustomCommand;
+               a.acpCustomCommand != b.acpCustomCommand;
+    }
+
+    TerminalPage::AgentRuntimeConfigSnapshot TerminalPage::_CaptureAgentRuntimeConfig() const
+    {
+        const auto& globals = _settings.GlobalSettings();
+        return AgentRuntimeConfigSnapshot{
+            std::wstring{ globals.AcpModel() },
+            std::wstring{ _ResolveEffectiveDelegateAgent(globals) },
+            std::wstring{ globals.DelegateModel() },
+            globals.EffectiveAutoFixEnabled(),
+        };
+    }
+
+    // Hot-propagate runtime agent config to the running wta-helper(s) over
+    // the protocol event channel. Unlike agent *identity* changes (which
+    // require a master respawn via _RebuildAgentStack), these take effect
+    // without tearing down the agent pane. A single consolidated
+    // `agent_config_changed` event carries only the fields that changed:
+    //   - autofix_enabled : the auto-suggest gate (was its own event)
+    //   - acp_model        : the main ACP agent's model override
+    //   - delegate_agent + delegate_model : the delegate-tab agent identity;
+    //     both travel together so the helper can rebuild its delegate
+    //     runtime table in one shot.
+    void TerminalPage::_EmitAgentRuntimeConfigIfChanged()
+    {
+        const auto current = _CaptureAgentRuntimeConfig();
+
+        // First call just seeds the baseline — there's no running helper to
+        // notify yet, and on first load the helper picks these values up
+        // from its spawn cmdline.
+        if (!_agentRuntimeConfigInitialized)
+        {
+            _lastAgentRuntimeConfig = current;
+            _agentRuntimeConfigInitialized = true;
+            return;
+        }
+
+        const auto& last = _lastAgentRuntimeConfig;
+        const bool autofixChanged = last.autofixEnabled != current.autofixEnabled;
+        const bool acpModelChanged = last.acpModel != current.acpModel;
+        const bool delegateChanged = last.delegateAgent != current.delegateAgent ||
+                                     last.delegateModel != current.delegateModel;
+
+        if (!autofixChanged && !acpModelChanged && !delegateChanged)
+        {
+            return;
+        }
+
+        Json::Value params{ Json::objectValue };
+        if (autofixChanged)
+        {
+            params["autofix_enabled"] = current.autofixEnabled;
+        }
+        if (acpModelChanged)
+        {
+            params["acp_model"] = winrt::to_string(current.acpModel);
+        }
+        if (delegateChanged)
+        {
+            params["delegate_agent"] = winrt::to_string(current.delegateAgent);
+            params["delegate_model"] = winrt::to_string(current.delegateModel);
+        }
+
+        _agentPaneLog("emitting agent_config_changed (hot settings update)");
+        _RaiseProtocolEvent("agent_config_changed", params);
+
+        _lastAgentRuntimeConfig = current;
+    }
+
+    // Single source of the wta protocol-event wire shape. Wraps `params` in a
+    // `{type:"event", method, params}` envelope, serializes it compactly, and
+    // raises it on ProtocolVtSequenceReceived (which fans out to the agent
+    // helper(s) over the COM event bus).
+    void TerminalPage::_RaiseProtocolEvent(std::string_view method, const Json::Value& params)
+    {
+        Json::Value evt{ Json::objectValue };
+        evt["type"] = "event";
+        evt["method"] = std::string{ method };
+        evt["params"] = params;
+
+        Json::StreamWriterBuilder wb;
+        wb["indentation"] = "";
+        ProtocolVtSequenceReceived.raise(
+            *this,
+            winrt::to_hstring(Json::writeString(wb, evt)));
     }
 
     // Close the agent pane in a specific tab, if it has one.
@@ -1469,17 +1535,9 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        Json::Value tabEvt;
-        tabEvt["type"] = "event";
-        tabEvt["method"] = "reset_tab_session";
         Json::Value tabParams;
         tabParams["tab_id"] = winrt::to_string(tabId);
-        tabEvt["params"] = tabParams;
-        Json::StreamWriterBuilder wb;
-        wb["indentation"] = "";
-        ProtocolVtSequenceReceived.raise(
-            *this,
-            winrt::to_hstring(Json::writeString(wb, tabEvt)));
+        _RaiseProtocolEvent("reset_tab_session", tabParams);
     }
 
     // Tells wta that a tab has been destroyed so it can drop the per-tab
@@ -1491,18 +1549,10 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        Json::Value tabEvt;
-        tabEvt["type"] = "event";
-        tabEvt["method"] = "tab_closed";
         Json::Value tabParams;
         tabParams["tab_id"] = winrt::to_string(tabId);
         tabParams["window_id"] = std::to_string(_WindowProperties.WindowId());
-        tabEvt["params"] = tabParams;
-        Json::StreamWriterBuilder wb;
-        wb["indentation"] = "";
-        ProtocolVtSequenceReceived.raise(
-            *this,
-            winrt::to_hstring(Json::writeString(wb, tabEvt)));
+        _RaiseProtocolEvent("tab_closed", tabParams);
     }
 
     // Explicitly emit `connection_state:closed` for every terminal leaf
@@ -1574,18 +1624,10 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        Json::Value tabEvt;
-        tabEvt["type"] = "event";
-        tabEvt["method"] = "tab_changed";
         Json::Value tabParams;
         tabParams["tab_id"] = winrt::to_string(tabId);
         tabParams["window_id"] = std::to_string(_WindowProperties.WindowId());
-        tabEvt["params"] = tabParams;
-        Json::StreamWriterBuilder wb;
-        wb["indentation"] = "";
-        ProtocolVtSequenceReceived.raise(
-            *this,
-            winrt::to_hstring(Json::writeString(wb, tabEvt)));
+        _RaiseProtocolEvent("tab_changed", tabParams);
     }
 
     // C++ → wta request for changing per-tab agent-pane UI state. The target
@@ -1596,9 +1638,6 @@ namespace winrt::TerminalApp::implementation
                                                 std::optional<std::string_view> view,
                                                 std::optional<bool> paneOpen)
     {
-        Json::Value evt;
-        evt["type"] = "event";
-        evt["method"] = "set_agent_state";
         Json::Value params;
         params["window_id"] = std::to_string(_WindowProperties.WindowId());
 
@@ -1622,13 +1661,8 @@ namespace winrt::TerminalApp::implementation
             params["pane_open"] = *paneOpen;
             logSuffix += " pane_open=" + std::string{ *paneOpen ? "true" : "false" };
         }
-        evt["params"] = params;
-        Json::StreamWriterBuilder wb;
-        wb["indentation"] = "";
         _agentPaneLog(std::string{ "requesting set_agent_state:" } + logSuffix);
-        ProtocolVtSequenceReceived.raise(
-            *this,
-            winrt::to_hstring(Json::writeString(wb, evt)));
+        _RaiseProtocolEvent("set_agent_state", params);
     }
 
     // Builds the per-process flag/value pairs that wta-master inherits
@@ -2137,17 +2171,9 @@ namespace winrt::TerminalApp::implementation
             // "Ask the agent for a fix": open/focus the pane so the user
             // watches the analysis, then fire the LLM call. No auto-inject.
             openAgentPaneForReview();
-            Json::Value evt;
-            evt["type"] = "event";
-            evt["method"] = "autofix_execute_from_detected";
             Json::Value params;
             params["pane_id"] = winrt::to_string(paneId);
-            evt["params"] = params;
-            Json::StreamWriterBuilder wb;
-            wb["indentation"] = "";
-            ProtocolVtSequenceReceived.raise(
-                *this,
-                winrt::to_hstring(Json::writeString(wb, evt)));
+            _RaiseProtocolEvent("autofix_execute_from_detected", params);
             break;
         }
         case AS::Review:
@@ -7098,9 +7124,6 @@ namespace winrt::TerminalApp::implementation
                             const auto newTabId = focusedTab->StableId();
                             if (!newTabId.empty() && newTabId != oldTabId)
                             {
-                                Json::Value evt;
-                                evt["type"] = "event";
-                                evt["method"] = "tab_renamed";
                                 Json::Value params;
                                 params["old_tab_id"] = winrt::to_string(oldTabId);
                                 params["new_tab_id"] = winrt::to_string(newTabId);
@@ -7110,14 +7133,10 @@ namespace winrt::TerminalApp::implementation
                                 // set_agent_state events from the new window
                                 // pass the per-tab window filter.
                                 params["window_id"] = std::to_string(_WindowProperties.WindowId());
-                                evt["params"] = params;
-                                Json::StreamWriterBuilder wb;
-                                wb["indentation"] = "";
-                                const auto payload = winrt::to_hstring(Json::writeString(wb, evt));
                                 _agentPaneLog(
                                     std::string{ "_MakeTerminalPane: emitting tab_renamed old=" } +
                                     winrt::to_string(oldTabId) + " new=" + winrt::to_string(newTabId));
-                                ProtocolVtSequenceReceived.raise(*this, payload);
+                                _RaiseProtocolEvent("tab_renamed", params);
                             }
                             else
                             {
