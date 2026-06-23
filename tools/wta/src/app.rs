@@ -2139,6 +2139,7 @@ pub(crate) fn session_info_to_agent_session(
         attention_reason: info.attention_reason.clone(),
         log_path: None,
         origin,
+        location: info.location.clone(),
     }
 }
 
@@ -2794,6 +2795,11 @@ impl App {
         use crate::session_mgmt::{
             decide_enter_action, liveness_from_status, EnterAction, NotResumableReason, RowSnapshot,
         };
+        // WSL rows can only resume via the CLI `--resume` flag *inside*
+        // the distro. ACP `session/load` (the Shift target for Class B
+        // dead rows) can't rehydrate a Linux session into a host agent
+        // pane, so collapse Shift to Enter — both route to ResumeCliFlag.
+        let shift = shift && !s.location.is_wsl();
         // Ambient: load_session capability is set during ACP init;
         // resume-flag support is a per-CLI profile constant — true for
         // Claude / Codex / Copilot / Gemini (all four CLIs accept some
@@ -3023,7 +3029,9 @@ impl App {
         // artefacts at startup, *then* validate the `--resume`
         // argument and exit with an error — leaving phantom artefacts
         // behind for the next session-load to surface again.
-        if !crate::history_loader::key_is_resumable_on_disk(&s.cli_source, &s.key) {
+        if !s.location.is_wsl()
+            && !crate::history_loader::key_is_resumable_on_disk(&s.cli_source, &s.key)
+        {
             tracing::warn!(
                 target: "agents_view",
                 key = %s.key,
@@ -3054,7 +3062,28 @@ impl App {
         }
 
         let key = s.key.clone();
-        let commandline = format!("{} {} {}", cli_id, profile.resume_flag, key);
+        let resume_invocation = format!("{} {} {}", cli_id, profile.resume_flag, key);
+        // WSL rows run the distro's own CLI *inside* the distro. Two
+        // WSL/cmd quirks shape this command line:
+        //   * The distro name is **not** quoted. `wsl -d "Ubuntu"` fails with
+        //     WSL_E_DISTRO_NOT_FOUND when the command runs under the
+        //     `cmd /c echo … && …` banner wrapper — cmd/wsl don't strip the
+        //     quotes off `-d`, so wsl looks for a distro literally named
+        //     `"Ubuntu"`. Distro names from `wsl -l` are space-free, so bare
+        //     `-d <distro>` is safe. The `--cd` path keeps its quotes (it can
+        //     contain spaces and quoting works fine there).
+        //   * The CLI is launched through a **login shell** (`bash -lc`) so the
+        //     user's PATH is set up — a snap-installed Copilot lives in
+        //     `/snap/bin`, which a bare `wsl -- copilot` misses ("command not
+        //     found"). A login shell sources the profile that adds it.
+        let login_invocation = format!("bash -lc \"{resume_invocation}\"");
+        let commandline = match &s.location {
+            crate::agent_sessions::SessionLocation::Wsl { distro } => match linux_cwd_arg(&s.cwd) {
+                Some(cwd) => format!("wsl -d {distro} --cd \"{cwd}\" -- {login_invocation}"),
+                None => format!("wsl -d {distro} -- {login_invocation}"),
+            },
+            crate::agent_sessions::SessionLocation::Host => resume_invocation,
+        };
 
         // Per-CLI session stores are keyed by an encoding of the *current*
         // working directory (e.g. Claude looks under
@@ -3090,7 +3119,13 @@ impl App {
         let raw_cwd_string = s.cwd.to_string_lossy().to_string();
         // Drop stale cwd so wtcli falls back to the profile default
         // rather than failing CreateProcessW with ERROR_DIRECTORY.
-        let valid_cwd = crate::cwd_util::validate_starting_directory(&s.cwd);
+        // WSL rows use `wsl --cd` inside the distro command; passing
+        // the Linux path as a Windows `-d` flag to wtcli would fail.
+        let valid_cwd = if s.location.is_wsl() {
+            None
+        } else {
+            crate::cwd_util::validate_starting_directory(&s.cwd)
+        };
         if valid_cwd.is_none() && !raw_cwd_string.is_empty() {
             tracing::warn!(
                 target: "agents_view",
@@ -3099,10 +3134,24 @@ impl App {
             );
         }
         let short_key: String = key.chars().take(8).collect();
-        let launch_commandline = format!(
-            "cmd /c echo \x1b[2;37mResuming {} session {}...\x1b[0m && {}",
-            cli_id, short_key, commandline
-        );
+        // Loading banner shown in the new pane while the CLI cold-starts.
+        // WSL rows also name the distro ("Resuming copilot session abc-123
+        // in Ubuntu (WSL)...") so the user can see which distro is being
+        // entered; host rows keep just the short session id. A WSL session
+        // only appears in the list because its distro was already started and
+        // scanned, so it is running at resume time — a "starting the distro…"
+        // hint would usually be wrong. (WSL2 can auto-shut-down an idle distro
+        // later, but a frequently-wrong hint is worse than none.)
+        let banner = match &s.location {
+            crate::agent_sessions::SessionLocation::Wsl { distro } => {
+                format!("Resuming {cli_id} session {short_key} in {distro} (WSL)...")
+            }
+            crate::agent_sessions::SessionLocation::Host => {
+                format!("Resuming {cli_id} session {short_key}...")
+            }
+        };
+        let launch_commandline =
+            format!("cmd /c echo \x1b[2;37m{banner}\x1b[0m && {commandline}");
         let mut argv = vec![
             "new-tab".to_string(),
             "-c".to_string(),
@@ -7903,6 +7952,16 @@ impl App {
     }
 }
 
+/// Return the cwd to hand to `wsl --cd` — only when it's an absolute
+/// Linux path (starts with `/`). A Windows path, empty cwd, or a path
+/// containing a double-quote (which would break the quoted `--cd "…"`
+/// argument) yields `None`, so WSL falls back to the distro's `$HOME`.
+fn linux_cwd_arg(cwd: &std::path::Path) -> Option<String> {
+    let s = cwd.to_string_lossy();
+    let s = s.trim();
+    (s.starts_with('/') && !s.contains('"')).then(|| s.to_string())
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // TurnState transition methods
 //
@@ -11133,6 +11192,76 @@ mod tests {
         let rows = app.agents_rows_for_tab(DEFAULT_TAB_ID);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key, "shell-key");
+    }
+
+    /// The PRODUCTION snapshot path (master pushed `sessions/list` response
+    /// into `agents_view.snapshot`) must preserve the `Wsl` location in every
+    /// `AgentSession` produced by `agents_rows_for_tab`.
+    ///
+    /// This is the regression test that would have caught the original bug:
+    /// `session_info_to_agent_session` hardcoded `location: Host`, so WSL
+    /// rows crossing the master→helper boundary silently lost their distro
+    /// stamp.  The fix carries `location` through `SessionInfo`; this test
+    /// guards that fix forever.
+    #[test]
+    fn agents_rows_snapshot_preserves_wsl_location() {
+        use crate::agent_sessions::{OriginFilter, SessionLocation};
+
+        let mut app = test_app();
+        // Use `All` to bypass the MVP ShellOnly filter — we want to confirm
+        // location preservation regardless of origin filtering.
+        app.sessions_origin_filter = OriginFilter::All;
+
+        let mut info = session_info_for_test("wsl-1");
+        info.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
+        info.location = SessionLocation::Wsl { distro: "Ubuntu".into() };
+
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_view.snapshot = Some(vec![info]);
+
+        let rows = app.agents_rows_for_tab(DEFAULT_TAB_ID);
+        assert_eq!(rows.len(), 1, "expected one row; got: {rows:?}");
+        assert!(
+            rows[0].location.is_wsl(),
+            "snapshot path must preserve WSL location; got: {:?}",
+            rows[0].location
+        );
+        assert_eq!(
+            rows[0].location,
+            SessionLocation::Wsl { distro: "Ubuntu".into() },
+            "distro name must round-trip through session_info_to_agent_session"
+        );
+    }
+
+    /// End-to-end render proof: a WSL `SessionInfo` in the `/sessions`
+    /// snapshot must actually paint its bracketed distro tag (`[WSL-Ubuntu]`)
+    /// on screen. `agents_rows_snapshot_preserves_wsl_location` proves the
+    /// data path and `origin_prefix_shows_distro_for_wsl_rows` proves the
+    /// prefix builder; this closes the loop through `crate::ui::render` so a
+    /// regression in `agents_view::render`'s own `session_info_to_agent_session`
+    /// conversion (a *second* call site, separate from `agents_rows_for_tab`)
+    /// can't silently drop the tag.
+    #[test]
+    fn render_sessions_view_paints_wsl_distro_tag() {
+        use crate::agent_sessions::{OriginFilter, SessionLocation};
+
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.sessions_origin_filter = OriginFilter::All;
+
+        let mut info = session_info_for_test("wsl-render-1");
+        info.title = Some("hack on wsl".into());
+        info.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
+        info.location = SessionLocation::Wsl { distro: "Ubuntu".into() };
+
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_view.snapshot = Some(vec![info]);
+
+        let text = render_to_text(&mut app, 80, 24);
+        assert!(
+            text.contains("[WSL-Ubuntu]"),
+            "the /sessions view must paint the bracketed WSL distro tag; rendered:\n{text}"
+        );
     }
 
     /// `resolve_sessions_origin_filter` reads the `WTA_SESSIONS_SHOW_AGENT_PANE`
@@ -15255,5 +15384,52 @@ mod tests {
     fn known_cli_id_returns_none_for_unknown_variant() {
         use crate::agent_sessions::CliSource;
         assert_eq!(known_cli_id(&CliSource::Unknown("anything".to_string())), None);
+    }
+
+    #[test]
+    fn enter_on_wsl_history_row_resumes_inside_distro() {
+        use crate::agent_sessions::{AgentStatus, CliSource, SessionLocation, SessionOrigin};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let row = crate::agent_sessions::AgentSession {
+            key:              "abc-123".to_string(),
+            cli_source:       CliSource::Copilot,
+            pane_session_id:  None,
+            window_id:        None,
+            tab_id:           None,
+            title:            "t".to_string(),
+            cwd:              std::path::PathBuf::from("/home/u/proj"),
+            started_at:       std::time::SystemTime::UNIX_EPOCH,
+            last_activity_at: std::time::SystemTime::UNIX_EPOCH,
+            status:           AgentStatus::Historical,
+            last_error:       None,
+            current_tool:     None,
+            attention_reason: None,
+            log_path:         None,
+            origin:           SessionOrigin::Unknown,
+            location:         SessionLocation::Wsl { distro: "Ubuntu".to_string() },
+        };
+        let mut app = test_app();
+        app.agent_sessions.merge_historical(vec![row]);
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_list_state.select(Some(0));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let cmd = app
+            .last_dispatched_command_for_test()
+            .expect("a command was dispatched");
+        assert_eq!(cmd.kind, DispatchedCommandKind::NewTabResume);
+        let argv = cmd.argv.join(" ");
+        assert!(
+            argv.contains("wsl -d Ubuntu --cd \"/home/u/proj\" -- bash -lc \"copilot --resume abc-123\""),
+            "expected in-distro resume; argv: {argv}"
+        );
+        // The loading banner keeps the short session id and also names the
+        // distro for WSL rows.
+        assert!(
+            argv.contains("Resuming copilot session abc-123 in Ubuntu (WSL)"),
+            "expected distro-named WSL banner; argv: {argv}"
+        );
+        // WSL rows must not also pass the Windows `-d <cwd>` flag.
+        assert!(!argv.contains(" -d /home"), "WSL row must not pass Windows -d cwd");
     }
 }
