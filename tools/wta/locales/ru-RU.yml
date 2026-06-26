@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "CLI агента %{name} — "
 auth.checking_authentication: "  %{spinner} Проверка аутентификации..."
 auth.waiting_for_authorization: "  %{spinner} Ожидание авторизации..."
 auth.code_copied_hint: "  Код скопирован в буфер обмена — вставьте его в браузере."
+auth.device_code_prompt: "Перейдите по адресу %{url} и введите код: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "Войдите, чтобы использовать агента:"
 auth.card_connect: "  Подключите %{name} для включения функций агента"
-auth.button_sign_in_github: "[ Войти через GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Войти через %{name} ]"
-auth.hint_footer: "  Нажмите Enter для входа, Esc для возврата"  # {Locked="Enter","Esc"}
+auth.hint_footer: "  Нажмите Enter, чтобы скопировать команду входа, затем вставьте её в новом окне терминала для завершения входа"  # {Locked="Enter"}
+auth.hint_footer_back: "  Esc, чтобы вернуться"  # {Locked="Esc"}
+auth.enterprise_prompt: "  Enter для входа · E для GitHub Enterprise · Esc, чтобы вернуться"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Домен GitHub Enterprise: "
+auth.enterprise_hint_footer: "  Enter для входа · Esc для github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Нажмите Enter, чтобы повторить попытку, или Esc для github.com. Распространённые причины: опечатка в домене или недоступный домен, истёкший код либо отсутствие доступа Copilot на этом узле."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Нажмите Enter, чтобы повторить попытку, или Esc, чтобы вернуться."  # {Locked="Enter","Esc"}
 
 # ── Представление чата (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Думаю…"
@@ -58,6 +63,7 @@ chat.turn_executed: "→ выполнено: %{title}"
 input.placeholder.connected: "Спросите что угодно, / для команд.."  # {Locked="/"}
 input.placeholder.connecting: "Подключение..."
 input.placeholder.disconnected: "Отключено"
+input.image_attachments: "📎 Изображения: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Всплывающее окно команд (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - префикс слеш-команды, должен оставаться ASCII
@@ -114,8 +120,8 @@ agent.custom.auth_hint: "Убедитесь, что %{name} установлен
 
 # ── Представление агентов (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Загрузка..."
-# {Locked="Enter","Esc","↑","↓"} - комбинации клавиш, не переводить
-agents.footer_hint: "(↑ ↓ навигация • Enter запустить сеанс • Esc выход)"
+# {Locked="Enter","Esc","F5","↑","↓"} - комбинации клавиш, не переводить
+agents.footer_hint: "(↑ ↓ навигация • Enter запустить сеанс • Esc выход • F5 обновить)"
 agents.status.active: "Активен"
 agents.status.waiting_for_input: "Ожидание ввода"
 agents.status.error: "Ошибка"
@@ -139,6 +145,9 @@ system.stopped_max_tokens: "Ответ был обрезан после дост
 system.stopped_max_turn_requests: "Агент остановился после достижения лимита запросов для этого хода."
 system.stopped_refusal: "Агент отказался продолжать выполнение этого запроса."
 system.agent_busy: "Агент занят на этой вкладке — дождитесь завершения текущего запроса."
+system.image_clipboard_empty: "В буфере обмена нет изображения для вставки."
+system.image_not_supported: "Этот агент не поддерживает ввод изображений."
+system.image_pasted: "Изображение прикреплено (%{label}). Нажмите Enter, чтобы отправить."  # {Locked="%{label}","Enter"}
 system.resuming_session: "Возобновление сеанса %{session_id}..."
 system.unknown_command: "Неизвестная команда \"%{command}\" — отправлена как запрос. Введите /help, чтобы увидеть список."  # {Locked="/help"}
 system.busy_use_stop: "Дождитесь завершения текущего запроса или сначала используйте /stop."  # {Locked="/stop"}

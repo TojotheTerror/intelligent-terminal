@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "CLI de agente %{name} — "
 auth.checking_authentication: "  %{spinner} Comprobando autenticación..."
 auth.waiting_for_authorization: "  %{spinner} Esperando autorización..."
 auth.code_copied_hint: "  Código copiado en el portapapeles — péguelo en su navegador."
+auth.device_code_prompt: "Visite %{url} e introduzca el código: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "Inicie sesión para usar su agente:"
 auth.card_connect: "  Conectar %{name} para habilitar las funciones del agente"
-auth.button_sign_in_github: "[ Iniciar sesión con GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Iniciar sesión con %{name} ]"
-auth.hint_footer: "  Pulse Enter para iniciar sesión, Esc para volver"  # {Locked="Enter","Esc"}
+auth.hint_footer: "  Pulse Enter para copiar el comando de inicio de sesión y péguelo en una nueva ventana de terminal para terminar de iniciar sesión"  # {Locked="Enter"}
+auth.hint_footer_back: "  Esc para volver atrás"  # {Locked="Esc"}
+auth.enterprise_prompt: "  Enter para iniciar sesión · E para GitHub Enterprise · Esc para volver atrás"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Dominio de Enterprise: "
+auth.enterprise_hint_footer: "  Enter para iniciar sesión · Esc para github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Pulse Enter para reintentar, o Esc para github.com. Causas comunes: un dominio mal escrito o inaccesible, un código expirado o falta de acceso a Copilot en ese host."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Pulse Enter para reintentar, o Esc para volver atrás."  # {Locked="Enter","Esc"}
 
 # ── Vista de chat (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Pensando…"
@@ -58,6 +63,7 @@ chat.turn_executed: "→ ejecutado: %{title}"
 input.placeholder.connected: "Pregunte lo que sea, / para comandos.."  # {Locked="/"}
 input.placeholder.connecting: "Conectando..."
 input.placeholder.disconnected: "Desconectado"
+input.image_attachments: "📎 Imágenes: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Ventana emergente de comandos (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - prefijo de comando de barra diagonal, debe permanecer en ASCII
@@ -106,8 +112,8 @@ agent.custom.auth_hint: "Asegúrese de que %{name} esté instalado y en el PATH.
 
 # ── Vista de agentes (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Cargando..."
-# {Locked="Enter","Esc","↑","↓"} - combinaciones de teclas, no traducir
-agents.footer_hint: "(↑ ↓ navegar • Enter iniciar sesión • Esc salir)"
+# {Locked="Enter","Esc","F5","↑","↓"} - combinaciones de teclas, no traducir
+agents.footer_hint: "(↑ ↓ navegar • Enter iniciar sesión • Esc salir • F5 actualizar)"
 agents.status.active: "Activo"
 agents.status.waiting_for_input: "Esperando entrada"
 agents.status.error: "Error"
@@ -131,6 +137,9 @@ system.stopped_max_tokens: "La respuesta se interrumpió al alcanzar el límite 
 system.stopped_max_turn_requests: "El agente se detuvo al alcanzar su límite de solicitudes para este turno."
 system.stopped_refusal: "El agente se negó a continuar con esta solicitud."
 system.agent_busy: "El agente está ocupado en esta pestaña — espere a que termine la indicación actual."
+system.image_clipboard_empty: "No hay ninguna imagen en el portapapeles para pegar."
+system.image_not_supported: "Este agente no admite la entrada de imágenes."
+system.image_pasted: "Imagen adjunta (%{label}). Pulse Enter para enviar."  # {Locked="%{label}","Enter"}
 system.resuming_session: "Reanudando la sesión %{session_id}..."
 system.unknown_command: "Comando desconocido \"%{command}\" — enviado como indicación. Escriba /help para ver la lista."
 system.busy_use_stop: "Espere a que termine la indicación actual, o use /stop primero."

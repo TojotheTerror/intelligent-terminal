@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "CLI הסוכן %{name} — "
 auth.checking_authentication: "  %{spinner} בודק אימות..."
 auth.waiting_for_authorization: "  %{spinner} ממתין לאישור..."
 auth.code_copied_hint: "  הקוד הועתק ללוח — הדבק אותו בדפדפן."
+auth.device_code_prompt: "עבור אל %{url} והזן את הקוד: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "היכנס כדי להשתמש בסוכן שלך:"
 auth.card_connect: "  חבר את %{name} כדי לאפשר תכונות סוכן"
-auth.button_sign_in_github: "[ היכנס באמצעות GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ היכנס באמצעות %{name} ]"
-auth.hint_footer: "  לחץ Enter כדי להיכנס, Esc כדי לחזור"  # {Locked="Enter","Esc"}
+auth.hint_footer: "  הקש Enter כדי להעתיק את פקודת הכניסה, ולאחר מכן הדבק אותה בחלון מסוף חדש כדי לסיים את הכניסה"  # {Locked="Enter"}
+auth.hint_footer_back: "  הקש Esc כדי לחזור"  # {Locked="Esc"}
+auth.enterprise_prompt: "  Enter לכניסה · E עבור GitHub Enterprise · Esc כדי לחזור"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  תחום ארגוני: "
+auth.enterprise_hint_footer: "  Enter לכניסה · Esc עבור github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  הקש Enter כדי לנסות שוב, או Esc עבור github.com. סיבות נפוצות: תחום שהוקלד שגוי או שאינו נגיש, קוד שפג תוקפו, או אין גישת Copilot במארח זה."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  הקש Enter כדי לנסות שוב, או Esc כדי לחזור."  # {Locked="Enter","Esc"}
 
 # ── תצוגת צ'אט (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "חושב…"
@@ -58,6 +63,7 @@ chat.turn_executed: "→ בוצע: %{title}"
 input.placeholder.connected: "שאל כל דבר, / לפקודות.."  # {Locked="/"}
 input.placeholder.connecting: "מתחבר..."
 input.placeholder.disconnected: "מנותק"
+input.image_attachments: "📎 תמונות: %{items}"  # {Locked="📎","%{items}"}
 
 # ── חלון פקודות מוקפץ (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - קידומת פקודת לוכסן, חייב להישאר ASCII
@@ -118,8 +124,8 @@ agent.custom.auth_hint: "ודא ש-%{name} מותקן ונמצא ב-PATH שלך.
 
 # ── תצוגת סוכנים (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "טוען..."
-# {Locked="Enter","Esc","↑","↓"} - צירופי מקשים, אין לתרגם
-agents.footer_hint: "(↑ ↓ לניווט • Enter להפעלת הפעלה • Esc ליציאה)"
+# {Locked="Enter","Esc","F5","↑","↓"} - צירופי מקשים, אין לתרגם
+agents.footer_hint: "(↑ ↓ לניווט • Enter להפעלת הפעלה • Esc ליציאה • F5 לרענון)"
 agents.status.active: "פעיל"
 agents.status.waiting_for_input: "ממתין לקלט"
 agents.status.error: "שגיאה"
@@ -143,6 +149,9 @@ system.stopped_max_tokens: "התגובה נקטעה לאחר שהגיעה למג
 system.stopped_max_turn_requests: "הסוכן נעצר לאחר שהגיע למגבלת הבקשות שלו לתור זה."
 system.stopped_refusal: "הסוכן סירב להמשיך בבקשה זו."
 system.agent_busy: "הסוכן עסוק בכרטיסיה זו — המתן עד שההנחיה הנוכחית תסתיים."
+system.image_clipboard_empty: "אין תמונה בלוח להדבקה."
+system.image_not_supported: "סוכן זה אינו תומך בקלט תמונה."
+system.image_pasted: "התמונה צורפה (%{label}). לחץ Enter כדי לשלוח."  # {Locked="%{label}","Enter"}
 system.resuming_session: "מחדש את ההפעלה %{session_id}..."
 system.unknown_command: "פקודה לא ידועה \"%{command}\" — נשלחה כהנחיה. הקלד /help לקבלת הרשימה."  # {Locked="/help"} — slash-command name.
 system.busy_use_stop: "המתן עד שההנחיה הנוכחית תסתיים, או הפעל תחילה /stop."  # {Locked="/stop"} — slash-command name.

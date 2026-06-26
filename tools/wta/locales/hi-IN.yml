@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "एजेंट %{name} — "
 auth.checking_authentication: "  %{spinner} प्रमाणीकरण जाँचा जा रहा है..."
 auth.waiting_for_authorization: "  %{spinner} प्राधिकरण की प्रतीक्षा हो रही है..."
 auth.code_copied_hint: "  कोड क्लिपबोर्ड पर कॉपी किया गया — इसे अपने ब्राउज़र में पेस्ट करें।"
+auth.device_code_prompt: "%{url} पर जाएँ और कोड दर्ज करें: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "अपने एजेंट का उपयोग करने के लिए साइन इन करें:"
 auth.card_connect: "  एजेंट सुविधाएँ सक्षम करने के लिए %{name} कनेक्ट करें"
-auth.button_sign_in_github: "[ GitHub से साइन इन करें ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ %{name} से साइन इन करें ]"
-auth.hint_footer: "  साइन इन के लिए Enter दबाएँ, वापस जाने के लिए Esc दबाएँ"  # {Locked="Enter","Esc"}
+auth.hint_footer: "  साइन-इन कमांड कॉपी करने के लिए Enter दबाएँ, फिर साइन इन पूरा करने के लिए उसे नई टर्मिनल विंडो में चिपकाएँ"  # {Locked="Enter"}
+auth.hint_footer_back: "  वापस जाने के लिए Esc"  # {Locked="Esc"}
+auth.enterprise_prompt: "  साइन इन करने के लिए Enter · GitHub Enterprise के लिए E · वापस जाने के लिए Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise डोमेन: "
+auth.enterprise_hint_footer: "  साइन इन करने के लिए Enter · github.com के लिए Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  फिर से प्रयास करने के लिए Enter दबाएँ, या github.com के लिए Esc. सामान्य कारण: गलत टाइप किया गया या पहुँच से बाहर डोमेन, समाप्त कोड, या उस होस्ट पर Copilot पहुँच न होना."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  फिर से प्रयास करने के लिए Enter दबाएँ, या वापस जाने के लिए Esc."  # {Locked="Enter","Esc"}
 
 # ── चैट दृश्य (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "सोच रहा है…"
@@ -58,6 +63,7 @@ chat.turn_executed: "→ निष्पादित: %{title}"
 input.placeholder.connected: "कुछ भी पूछें, / कमांड के लिए.."  # {Locked="/"}
 input.placeholder.connecting: "कनेक्ट हो रहा है..."
 input.placeholder.disconnected: "डिस्कनेक्ट"
+input.image_attachments: "📎 छवियाँ: %{items}"  # {Locked="📎","%{items}"}
 
 # ── कमांड पॉपअप (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - स्लैश-कमांड उपसर्ग, ASCII रहना चाहिए
@@ -118,8 +124,8 @@ agent.custom.auth_hint: "सुनिश्चित करें कि %{name}
 
 # ── एजेंट दृश्य (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "लोड हो रहा है..."
-# {Locked="Enter","Esc","↑","↓"} - कुंजी संयोजन, अनुवाद न करें
-agents.footer_hint: "(↑ ↓ नेविगेट करें • Enter सत्र शुरू करें • Esc बाहर निकलें)"
+# {Locked="Enter","Esc","F5","↑","↓"} - कुंजी संयोजन, अनुवाद न करें
+agents.footer_hint: "(↑ ↓ नेविगेट करें • Enter सत्र शुरू करें • Esc बाहर निकलें • F5 रीफ़्रेश करें)"
 agents.status.active: "सक्रिय"
 agents.status.waiting_for_input: "इनपुट की प्रतीक्षा"
 agents.status.error: "त्रुटि"
@@ -143,6 +149,9 @@ system.stopped_max_tokens: "मॉडल की आउटपुट सीमा 
 system.stopped_max_turn_requests: "इस बारी के लिए अपनी अनुरोध सीमा तक पहुँचने के बाद एजेंट रुक गया।"
 system.stopped_refusal: "एजेंट ने इस अनुरोध को जारी रखने से इनकार कर दिया।"
 system.agent_busy: "इस टैब पर Agent व्यस्त है — वर्तमान प्रॉम्प्ट समाप्त होने तक प्रतीक्षा करें।"
+system.image_clipboard_empty: "क्लिपबोर्ड पर पेस्ट करने के लिए कोई छवि नहीं है।"
+system.image_not_supported: "यह एजेंट छवि इनपुट का समर्थन नहीं करता।"
+system.image_pasted: "छवि संलग्न की गई (%{label}). भेजने के लिए Enter दबाएँ."  # {Locked="%{label}","Enter"}
 system.resuming_session: "सत्र %{session_id} फिर से शुरू किया जा रहा है..."
 system.unknown_command: "अज्ञात कमांड \"%{command}\" — प्रॉम्प्ट के रूप में भेजा गया। सूची के लिए /help लिखें।"  # {Locked="/help"} — slash-command name.
 system.busy_use_stop: "वर्तमान प्रॉम्प्ट समाप्त होने तक प्रतीक्षा करें, या पहले /stop करें।"  # {Locked="/stop"} — slash-command name.

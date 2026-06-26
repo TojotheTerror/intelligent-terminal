@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "ኤጅንት %{name} — "
 auth.checking_authentication: "  %{spinner} ማረጋገጥ በመፈተሽ..."
 auth.waiting_for_authorization: "  %{spinner} ፍቃድ በመጠበቅ..."
 auth.code_copied_hint: "ኮዱ ተቀድቷል — በአስሳሽዎ ላይ ይለጥፉት።"
+auth.device_code_prompt: "ወደ %{url} ይሂዱ እና ኮዱን ያስገቡ፦ %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "ኤጅንትዎን ለመጠቀም ይግቡ፡"
 auth.card_connect: "የኤጅንት ባህሪያትን ለማንቃት %{name} ይጋኙ"
-auth.button_sign_in_github: "[ በ GitHub ይግቡ ]"
-auth.button_sign_in_with: "[ በ %{name} ይግቡ ]"
-auth.hint_footer: "ለመግባት Enter ይጫኑ, ለመመለስ Esc ይጫኑ"
+auth.hint_footer: "  የመግቢያ ትእዛዙን ለመቅዳት Enter ይጫኑ፣ ከዚያ መግባቱን ለማጠናቀቅ በአዲስ ተርሚናል መስኮት ውስጥ ይለጥፉት"  # {Locked="Enter"}
+auth.hint_footer_back: "  ለመመለስ Esc"  # {Locked="Esc"}
+auth.enterprise_prompt: "  ለመግባት Enter · GitHub Enterprise ለመጠቀም E · ለመመለስ Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise ጎራ: "
+auth.enterprise_hint_footer: "  ለመግባት Enter · github.com ለመጠቀም Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  እንደገና ለመሞከር Enter ይጫኑ፣ ወይም github.com ለመጠቀም Esc. የተለመዱ ምክንያቶች፦ በስህተት የተጻፈ ወይም ሊደረስበት የማይችል ጎራ፣ ጊዜው ያለፈ ኮድ፣ ወይም በዚያ አስተናጋጅ ላይ የCopilot መዳረሻ አለመኖር።"  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  እንደገና ለመሞከር Enter ይጫኑ፣ ወይም ለመመለስ Esc."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "በማሰብ…"
@@ -58,6 +63,8 @@ chat.turn_executed: "→ ተፈጽሟል: %{title}"
 input.placeholder.connected: "Ask anything, / for commands.."  # {Locked="/"}
 input.placeholder.connecting: "connecting..."
 input.placeholder.disconnected: "disconnected"
+# Summary of attached images; keep 📎 and %{items} verbatim.
+input.image_attachments: "📎 ምስሎች: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -106,8 +113,8 @@ agent.custom.auth_hint: "Make sure %{name} is installed and on your PATH."  # {L
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Loading..."
-# {Locked="Enter","Esc","↑","↓"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session • Esc to exit)"
+# {Locked="Enter","Esc","F5","↑","↓"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session • Esc to exit • F5 to refresh)"
 agents.status.active: "Active"
 agents.status.waiting_for_input: "Waiting for input"
 agents.status.error: "Error"
@@ -131,6 +138,10 @@ system.stopped_max_tokens: "ምላሹ የሞዴሉ የውፅዓት ገደብ ላ
 system.stopped_max_turn_requests: "ወኪሉ ለዚህ ዙር የጥያቄ ገደቡ ላይ ከደረሰ በኋላ ቆሟል።"
 system.stopped_refusal: "ወኪሉ በዚህ ጥያቄ መቀጠል አልፈለገም።"
 system.agent_busy: "Agent በዚህ ትር ላይ በስራ ላይ ነው — የአሁኑ ጥያቄ እስኪያልቅ ይጠብቁ።"
+# Image paste messages; "agent" refers to an AI agent. Keep Enter and %{label} verbatim.
+system.image_clipboard_empty: "በቅንጥብ ሰሌዳው ላይ ለመለጠፍ ምስል የለም።"
+system.image_not_supported: "ይህ agent የምስል ግቤትን አይደግፍም።"
+system.image_pasted: "ምስል ተያይዟል (%{label})። ለመላክ Enter ይጫኑ።"  # {Locked="%{label}","Enter"}
 system.resuming_session: "ክፍለ ጊዜ %{session_id} እንደገና በመቀጠል ላይ..."
 system.unknown_command: "ያልታወቀ ትዕዛዝ \"%{command}\" — እንደ ጥያቄ ተልኳል። ዝርዝሩን ለማየት /help ይተይቡ።"  # {Locked="/help"} — slash-command name.
 system.busy_use_stop: "የአሁኑ ጥያቄ እስኪያልቅ ይጠብቁ፣ ወይም መጀመሪያ /stop ያድርጉ።"  # {Locked="/stop"} — slash-command name.

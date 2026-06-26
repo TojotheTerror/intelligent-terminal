@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "Agent-%{name} — "
 auth.checking_authentication: "  %{spinner} Verificatie controleren..."
 auth.waiting_for_authorization: "  %{spinner} Wachten op autorisatie..."
 auth.code_copied_hint: "  Code gekopieerd naar klembord — plak deze in uw browser."
+auth.device_code_prompt: "Ga naar %{url} en voer de code in: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "Meld u aan om uw agent te gebruiken:"
 auth.card_connect: "  %{name} verbinden om agentfuncties in te schakelen"
-auth.button_sign_in_github: "[ Aanmelden met GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Aanmelden met %{name} ]"
-auth.hint_footer: "  Druk op Enter om aan te melden, Esc om terug te gaan"  # {Locked="Enter","Esc"}
+auth.hint_footer: "  Druk op Enter om de aanmeldopdracht te kopiëren en plak deze vervolgens in een nieuw terminalvenster om het aanmelden te voltooien"  # {Locked="Enter"}
+auth.hint_footer_back: "  Esc om terug te gaan"  # {Locked="Esc"}
+auth.enterprise_prompt: "  Enter om aan te melden · E voor GitHub Enterprise · Esc om terug te gaan"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise-domein: "
+auth.enterprise_hint_footer: "  Enter om aan te melden · Esc voor github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Druk op Enter om het opnieuw te proberen, of Esc voor github.com. Veelvoorkomende oorzaken: een verkeerd getypt of onbereikbaar domein, een verlopen code of geen Copilot-toegang op die host."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Druk op Enter om het opnieuw te proberen, of Esc om terug te gaan."  # {Locked="Enter","Esc"}
 
 # ── Chatweergave (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Bezig met nadenken…"
@@ -58,6 +63,7 @@ chat.turn_executed: "→ uitgevoerd: %{title}"
 input.placeholder.connected: "Stel een vraag, / voor opdrachten.."  # {Locked="/"}
 input.placeholder.connecting: "Verbinden..."
 input.placeholder.disconnected: "Verbroken"
+input.image_attachments: "📎 Afbeeldingen: %{items}"  # {Locked="%{items}"} {Locked="📎"}
 
 # ── Opdrachtpopup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - schuine-streep-opdrachtvoorvoegsel, moet ASCII blijven
@@ -106,8 +112,8 @@ agent.custom.auth_hint: "Zorg dat %{name} is geïnstalleerd en in het PATH staat
 
 # ── Agentweergave (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Laden..."
-# {Locked="Enter","Esc","↑","↓"} - toetscombinaties, niet vertalen
-agents.footer_hint: "(↑ ↓ navigeren • Enter sessie starten • Esc afsluiten)"
+# {Locked="Enter","Esc","F5","↑","↓"} - toetscombinaties, niet vertalen
+agents.footer_hint: "(↑ ↓ navigeren • Enter sessie starten • Esc afsluiten • F5 vernieuwen)"
 agents.status.active: "Actief"
 agents.status.waiting_for_input: "Wachten op invoer"
 agents.status.error: "Fout"
@@ -131,6 +137,9 @@ system.stopped_max_tokens: "Het antwoord is afgekapt nadat de uitvoerlimiet van 
 system.stopped_max_turn_requests: "De agent is gestopt nadat de aanvraaglimiet voor deze beurt was bereikt."
 system.stopped_refusal: "De agent heeft geweigerd door te gaan met deze aanvraag."
 system.agent_busy: "De agent is bezig op dit tabblad — wacht tot de huidige prompt is voltooid."
+system.image_clipboard_empty: "Geen afbeelding op het klembord om te plakken."
+system.image_not_supported: "Deze agent ondersteunt geen afbeeldingsinvoer."
+system.image_pasted: "Afbeelding bijgevoegd (%{label}). Druk op Enter om te verzenden."  # {Locked="%{label}","Enter"}
 system.resuming_session: "Sessie %{session_id} wordt hervat..."
 system.unknown_command: "Onbekende opdracht \"%{command}\" — verzonden als prompt. Typ /help voor de lijst."
 system.busy_use_stop: "Wacht tot de huidige prompt is voltooid, of gebruik eerst /stop."

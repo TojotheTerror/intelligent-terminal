@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "CLI asiant %{name} — "
 auth.checking_authentication: "  %{spinner} Yn gwirio dilysiad..."
 auth.waiting_for_authorization: "  %{spinner} Yn aros am awdurdodiad..."
 auth.code_copied_hint: "  Cod wedi'i gopïo i'r clipfwrdd — gludiwch ef yn eich porwr."
+auth.device_code_prompt: "Ewch i %{url} a rhowch y cod: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "Mewngofnodwch i ddefnyddio'ch asiant:"
 auth.card_connect: "  Cysylltwch %{name} i alluogi nodweddion asiant"
-auth.button_sign_in_github: "[ Mewngofnodi gyda GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Mewngofnodi gyda %{name} ]"
-auth.hint_footer: "  Pwyswch Enter i fewngofnodi, Esc i fynd yn ôl"  # {Locked="Enter","Esc"}
+auth.hint_footer: "  Pwyswch Enter i gopïo'r gorchymyn mewngofnodi, yna gludwch ef mewn ffenestr derfynell newydd i orffen mewngofnodi"  # {Locked="Enter"}
+auth.hint_footer_back: "  Esc i fynd yn ôl"  # {Locked="Esc"}
+auth.enterprise_prompt: "  Enter = mewngofnodi · E = GitHub Enterprise · Esc = mynd yn ôl"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Parth Enterprise: "
+auth.enterprise_hint_footer: "  Enter = mewngofnodi · Esc = github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Pwyswch Enter i roi cynnig arall, neu Esc ar gyfer github.com. Achosion cyffredin: parth wedi'i deipio'n anghywir neu na ellir ei gyrraedd, cod sydd wedi dod i ben, neu ddim mynediad Copilot ar y gwesteiwr hwnnw."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Pwyswch Enter i roi cynnig arall, neu Esc i fynd yn ôl."  # {Locked="Enter","Esc"}
 
 # ── Golwg sgwrs (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Yn meddwl…"
@@ -58,6 +63,8 @@ chat.turn_executed: "→ wedi'i weithredu: %{title}"
 input.placeholder.connected: "Gofynnwch unrhyw beth, / am orchmynion.."  # {Locked="/"}
 input.placeholder.connecting: "yn cysylltu..."
 input.placeholder.disconnected: "datgysylltedig"
+# Summary of attached images; keep 📎 and %{items} verbatim.
+input.image_attachments: "📎 Delweddau: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Naidlen gorchmynion (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - rhagddodiad gorchymyn slaes, rhaid iddo aros yn ASCII
@@ -106,8 +113,8 @@ agent.custom.auth_hint: "Gwnewch yn siŵr fod %{name} wedi'i osod ac ar eich PAT
 
 # ── Golwg asiantau (src/ui/agents_view.rs) ─────────────────────────────────
 agents.loading: "Yn llwytho..."
-# {Locked="Enter","Esc","↑","↓"} - cyfuniadau bysellau, peidiwch â chyfieithu
-agents.footer_hint: "(↑ ↓ i lywio • Enter i lansio sesiwn • Esc i adael)"
+# {Locked="Enter","Esc","F5","↑","↓"} - cyfuniadau bysellau, peidiwch â chyfieithu
+agents.footer_hint: "(↑ ↓ i lywio • Enter i lansio sesiwn • Esc i adael • F5 i adnewyddu)"
 agents.status.active: "Gweithredol"
 agents.status.waiting_for_input: "Yn aros am fewnbwn"
 agents.status.error: "Gwall"
@@ -131,6 +138,10 @@ system.stopped_max_tokens: "Cafodd yr ymateb ei dorri ar ôl cyrraedd terfyn all
 system.stopped_max_turn_requests: "Stopiodd yr asiant ar ôl cyrraedd ei derfyn ceisiadau ar gyfer y tro hwn."
 system.stopped_refusal: "Gwrthododd yr asiant barhau â'r cais hwn."
 system.agent_busy: "Mae’r asiant yn brysur ar y tab hwn — arhoswch i’r anogiad presennol orffen."
+# Image paste messages; "agent" refers to an AI agent. Keep Enter and %{label} verbatim.
+system.image_clipboard_empty: "Nid oes delwedd ar y clipfwrdd i'w gludo."
+system.image_not_supported: "Nid yw'r asiant hwn yn cefnogi mewnbwn delwedd."
+system.image_pasted: "Delwedd wedi'i hatodi (%{label}). Pwyswch Enter i anfon."  # {Locked="%{label}","Enter"}
 system.resuming_session: "Yn ailddechrau sesiwn %{session_id}..."
 system.unknown_command: "Gorchymyn anhysbys \"%{command}\" — anfonwyd fel anogiad. Teipiwch /help am y rhestr."
 system.busy_use_stop: "Arhoswch i’r anogiad presennol orffen, neu defnyddiwch /stop yn gyntaf."

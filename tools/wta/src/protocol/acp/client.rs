@@ -90,6 +90,11 @@ pub struct PromptSubmission {
     /// as a User message (the client already shows the error line), and
     /// the planner uses it to pick the auto-fix prompt template.
     pub is_autofix: bool,
+    /// Images pasted into the input via Alt+V. Sent to the agent as ACP
+    /// `ContentBlock::Image` blocks appended after the text block (only when
+    /// the agent advertised `promptCapabilities.image`). Empty for the common
+    /// text-only and all auto-fix prompts.
+    pub images: Vec<crate::clipboard_image::PastedImage>,
 }
 
 /// User-initiated cancel of an in-flight prompt. The App emits one of
@@ -130,6 +135,10 @@ pub struct RestartRequest {
 pub enum MasterExtRequest {
     SessionsList {
         request_id: u64,
+        /// When true, master re-scans the on-disk historical session logs
+        /// (`load_for_cli`) before answering — the F5 refresh path — instead of
+        /// returning the cached registry snapshot.
+        rescan: bool,
     },
     SessionResumeDispatched {
         request_id: u64,
@@ -226,7 +235,14 @@ impl PromptSubmission {
             pane_context,
             submitted_at_unix_s: now_unix_s(),
             is_autofix,
+            images: Vec::new(),
         }
+    }
+
+    /// Attach pasted images (Alt+V) to a human-entered prompt.
+    pub fn with_images(mut self, images: Vec<crate::clipboard_image::PastedImage>) -> Self {
+        self.images = images;
+        self
     }
 
     pub fn preview(&self) -> String {
@@ -985,11 +1001,29 @@ fn process_image_name(_pid: u32) -> Option<String> {
     None
 }
 
-/// Resolve the canonical shell exe from an active-pane JSON object's `pid`
-/// field (already present in `get_active_pane`/`get_panes` responses). The
-/// agent gets this as the `shell` field — the sole shell-type signal, since
-/// the WT profile *name* (which the user can rename) is no longer shipped.
+/// Resolve the shell identity for an active-pane JSON object. The agent gets
+/// this as the `shell` field — the shell-type signal that drives PowerShell vs
+/// bash vs cmd syntax in any fix command it suggests.
+///
+/// Resolution order:
+///   1. The `shell` field reported by shell integration via `OSC 9001;ShellType`
+///      (e.g. `pwsh`, `powershell`, `bash`, `wsl:Ubuntu`). This is the only
+///      signal that survives a nested shell — `pwsh` → `wsl` → `exit` reports
+///      `wsl:<distro>` while inside WSL and `pwsh` again after exit, because the
+///      shell re-emits it on every prompt. The pid-based fallback below can't
+///      see this: the pane's host process stays `wsl.exe`/`pwsh.exe` regardless
+///      of which shell is actually drawing the prompt.
+///   2. Otherwise, the canonical shell exe from the pane's `pid` (covers panes
+///      without shell integration installed, or before the first prompt).
 fn shell_from_active(active: &serde_json::Value) -> Option<String> {
+    if let Some(shell) = active
+        .get("shell")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(shell.to_string());
+    }
     active
         .get("pid")
         .and_then(|v| v.as_u64())
@@ -1986,6 +2020,7 @@ pub async fn run_acp_client_over_pipe(
     mut master_ext_rx: mpsc::UnboundedReceiver<MasterExtRequest>,
     shell_mgr: Arc<ShellManager>,
     wt_connected: bool,
+    post_login_reconnect: bool,
 ) -> Result<()> {
     let startup_probe = StartupProbe::new();
     startup_probe.log(&format!(
@@ -2181,6 +2216,93 @@ pub async fn run_acp_client_over_pipe(
         init_resp
     ));
 
+    // ── Post-login authenticate ──────────────────────────────────────────
+    // If this is a reconnect after LoginComplete (the user just completed
+    // `copilot login` / `codex auth` / etc.), we MUST call `authenticate`
+    // per ACP spec before attempting `new_session`. Without this, the
+    // long-running agent CLI subprocess (owned by master) may not have
+    // noticed the new disk-stored token — its internal auth state was set
+    // at spawn time and may still be "not authenticated". The
+    // `authenticate` RPC is the deterministic signal that tells the agent
+    // "credentials changed, please re-check". See:
+    // https://agentclientprotocol.com/protocol/initialization
+    //
+    // Tracks whether we actually completed a post-login `authenticate` (vs.
+    // skipped it because the agent advertised no auth methods). Only then may
+    // a still-AuthRequired `new_session` be classified as the distinct
+    // "authenticate-OK-but-still-auth" recovery signal below.
+    let mut post_login_authenticated = false;
+    if post_login_reconnect {
+        let auth_method_id = init_resp
+            .auth_methods
+            .first()
+            .map(|m| m.id().clone());
+        if let Some(method_id) = auth_method_id {
+            tracing::info!(
+                target: "helper",
+                method_id = %method_id.0,
+                auth_methods_count = init_resp.auth_methods.len(),
+                "post-login reconnect: sending authenticate to agent"
+            );
+            let auth_result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                conn.authenticate(acp::AuthenticateRequest::new(method_id.clone())),
+            )
+            .await;
+            match &auth_result {
+                Ok(Ok(_)) => {
+                    tracing::info!(
+                        target: "helper",
+                        method_id = %method_id.0,
+                        "post-login authenticate succeeded"
+                    );
+                    post_login_authenticated = true;
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        target: "helper",
+                        method_id = %method_id.0,
+                        error_code = Into::<i32>::into(e.code),
+                        error_message = %e.message,
+                        "post-login authenticate failed — agent rejected credentials"
+                    );
+                    return Err(anyhow::Error::new(AgentFailure::HandshakeFailed {
+                        stage: crate::protocol::acp::failure::HandshakeStage::Authenticate,
+                        detail: format!(
+                            "authenticate({}) failed: {} (code {}). \
+                             The agent did not accept the credentials. \
+                             Try restarting Intelligent Terminal.",
+                            method_id.0,
+                            e.message,
+                            Into::<i32>::into(e.code),
+                        ),
+                    }));
+                }
+                Err(_timeout) => {
+                    tracing::error!(
+                        target: "helper",
+                        method_id = %method_id.0,
+                        "post-login authenticate timed out (10s) — agent unresponsive"
+                    );
+                    return Err(anyhow::Error::new(AgentFailure::HandshakeFailed {
+                        stage: crate::protocol::acp::failure::HandshakeStage::Authenticate,
+                        detail: format!(
+                            "authenticate({}) timed out after 10s — agent unresponsive. \
+                             Try restarting Intelligent Terminal.",
+                            method_id.0,
+                        ),
+                    }));
+                }
+            }
+        } else {
+            tracing::warn!(
+                target: "helper",
+                "post-login reconnect: no auth_methods advertised in initialize response; \
+                 skipping authenticate (agent may not require it)"
+            );
+        }
+    }
+
     // Bootstrap the alive-session mirror BEFORE creating our own
     // session. We want master's existing view in the registry first so
     // that any `intellterm.wta/session_added` notification for our own
@@ -2273,11 +2395,44 @@ pub async fn run_acp_client_over_pipe(
                 &new_session_result,
             );
             let session = new_session_result.map_err(|e| {
-                // Attach the typed classification so an auth error
+                let failure = AgentFailure::from_acp_error(&e);
+                // If we just completed post-login authenticate successfully
+                // but new_session STILL returns AuthRequired, do NOT route
+                // back to the login screen (that would recreate the auth
+                // loop). Surface a terminal HandshakeFailed tagged with the
+                // `NewSession` stage — the DISTINCT signal the App's auth
+                // recovery matches on (`is_post_login_auth_failure`). This is
+                // deliberately NOT the `Authenticate` stage: an authenticate
+                // RPC that itself fails/times out (above) stays `Authenticate`
+                // and must NOT trigger a master restart, only this
+                // "authenticate-OK-but-new_session-still-auth" case should.
+                // Gate on `post_login_authenticated`: if `authenticate` was
+                // skipped (agent advertised no auth methods) we did not prove
+                // credentials refreshed, so don't emit the "after successful
+                // authenticate" signal — fall through to the normal auth
+                // classification instead (the App still recovers genuine auth
+                // failures via its `AuthRequired` arm, bounded to one restart).
+                if post_login_reconnect && post_login_authenticated && failure.is_auth() {
+                    tracing::error!(
+                        target: "helper",
+                        error_code = Into::<i32>::into(e.code),
+                        "new_session still AuthRequired after successful authenticate — \
+                         agent has a deeper auth issue; not routing back to login screen"
+                    );
+                    return anyhow::Error::new(AgentFailure::HandshakeFailed {
+                        stage: crate::protocol::acp::failure::HandshakeStage::NewSession,
+                        detail: format!(
+                            "Agent still requires authentication after successful authenticate. \
+                             This may indicate a Copilot subscription or organization access issue. \
+                             Try restarting Intelligent Terminal or check https://github.com/settings/copilot"
+                        ),
+                    });
+                }
+                // Normal path: attach the typed classification so an auth error
                 // (or any ACP code) survives the `?`-collapse into
                 // `anyhow` and can be recovered by `classify_anyhow`
                 // downcast at the receiver (main.rs).
-                anyhow::Error::new(AgentFailure::from_acp_error(&e))
+                anyhow::Error::new(failure)
                     .context(format!("new_session over master pipe failed: {e}"))
             })?;
 
@@ -2350,9 +2505,10 @@ pub async fn run_acp_client_over_pipe(
         .and_then(|info| info.title.clone().or_else(|| Some(info.name.clone())))
         .unwrap_or_else(|| "wta-master".to_string());
     let load_session_supported = init_resp.agent_capabilities.load_session;
+    let image_supported = init_resp.agent_capabilities.prompt_capabilities.image;
     startup_probe.log(&format!(
-        "Agent capabilities (over pipe): loadSession={}",
-        load_session_supported
+        "Agent capabilities (over pipe): loadSession={} image={}",
+        load_session_supported, image_supported
     ));
     let _ = event_tx.send(AppEvent::AgentConnected {
         name: agent_name,
@@ -2364,6 +2520,7 @@ pub async fn run_acp_client_over_pipe(
         available_models,
         current_model_id,
         load_session_supported,
+        image_supported,
     });
 
     // Per-tab session cache. Only
@@ -2535,8 +2692,8 @@ fn dispatch_master_ext_request(
     let tab_to_session = Arc::clone(tab_to_session);
     tokio::task::spawn_local(async move {
         match req {
-            MasterExtRequest::SessionsList { request_id } => {
-                let wire = crate::session_registry::build_sessions_list_request();
+            MasterExtRequest::SessionsList { request_id, rescan } => {
+                let wire = crate::session_registry::build_sessions_list_request(rescan);
                 // Bound the wait so a single dropped RPC response can't
                 // permanently strand the tab's `refetch_in_flight=true`.
                 //
@@ -3122,6 +3279,24 @@ fn dispatch_rename_session(
     });
 }
 
+/// Assemble the ACP prompt content: the (already-templated) text block,
+/// followed by one `ContentBlock::Image` per pasted (Alt+V) image. Extracted
+/// so the text→Image ordering and base64/mime mapping are unit-testable
+/// without standing up a full ACP session.
+fn build_prompt_content(
+    text: &str,
+    images: &[crate::clipboard_image::PastedImage],
+) -> Vec<acp::ContentBlock> {
+    let mut content: Vec<acp::ContentBlock> = vec![text.to_string().into()];
+    for image in images {
+        content.push(acp::ContentBlock::Image(acp::ImageContent::new(
+            image.data_base64.clone(),
+            image.mime_type.clone(),
+        )));
+    }
+    content
+}
+
 fn dispatch_prompt(
     prompt: PromptSubmission,
     conn: &Arc<acp::ClientSideConnection>,
@@ -3349,9 +3524,14 @@ async fn dispatch_prompt_body(
         .unwrap()
         .insert(prompt_session_id_str.clone(), cancel_tx);
 
+    // Build the prompt content: the (templated) text block, followed by any
+    // images pasted via Alt+V as ACP `ContentBlock::Image` blocks. Images ride
+    // through master → agent CLI verbatim; the agent only receives them if it
+    // advertised `promptCapabilities.image` (the UI gates Alt+V on that flag).
+    let content = build_prompt_content(&text, &prompt.images);
     let prompt_fut = conn_task.prompt(acp::PromptRequest::new(
         prompt_session_id.clone(),
-        vec![text.into()],
+        content,
     ));
     tokio::pin!(prompt_fut);
 
@@ -3427,6 +3607,25 @@ mod tests {
 
         assert_eq!(shell_from_active(&serde_json::json!({ "pid": 0 })), None);
         assert_eq!(shell_from_active(&serde_json::json!({})), None);
+    }
+
+    /// The `shell` field reported via `OSC 9001;ShellType` wins over the
+    /// pid-based fallback — even when a real pid is present. This is the
+    /// nested-shell case (`pwsh` → `wsl` → bash): the pane's host process is
+    /// still pwsh/wsl.exe, but the prompt is drawn by bash, so the OSC-reported
+    /// `wsl:Ubuntu` must reach the agent. Platform-independent (no pid lookup).
+    #[test]
+    fn shell_from_active_prefers_osc_reported_shell() {
+        // Reported shell wins over a live pid.
+        let pane = serde_json::json!({ "pid": std::process::id(), "shell": "wsl:Ubuntu" });
+        assert_eq!(shell_from_active(&pane), Some("wsl:Ubuntu".to_string()));
+
+        // Empty/whitespace reported shell is ignored; falls back to pid (or None).
+        assert_eq!(
+            shell_from_active(&serde_json::json!({ "shell": "  ", "pid": 0 })),
+            None
+        );
+        assert_eq!(shell_from_active(&serde_json::json!({ "shell": "" })), None);
     }
 
     /// Helper-only: round-trip a `_meta` blob through `inject_wta_pane_meta`
@@ -3998,6 +4197,59 @@ mod tests {
     }
 
     // ── truncate / snippet / session_short ──────────────────────────────────
+
+    #[test]
+    fn build_prompt_content_text_only_is_single_text_block() {
+        let content = super::build_prompt_content("hello", &[]);
+        assert_eq!(content.len(), 1);
+        match &content[0] {
+            acp::ContentBlock::Text(t) => assert_eq!(t.text, "hello"),
+            other => panic!("expected text block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_prompt_content_appends_image_blocks_after_text() {
+        let images = vec![
+            crate::clipboard_image::PastedImage {
+                data_base64: "AAA=".to_string(),
+                mime_type: "image/png".to_string(),
+                label: "screenshot".to_string(),
+            },
+            crate::clipboard_image::PastedImage {
+                data_base64: "BBB=".to_string(),
+                mime_type: "image/jpeg".to_string(),
+                label: "photo.jpg".to_string(),
+            },
+        ];
+        let content = super::build_prompt_content("look at these", &images);
+        assert_eq!(content.len(), 3, "1 text + 2 image blocks");
+        assert!(matches!(content[0], acp::ContentBlock::Text(_)));
+        match (&content[1], &content[2]) {
+            (acp::ContentBlock::Image(a), acp::ContentBlock::Image(b)) => {
+                assert_eq!(a.data, "AAA=");
+                assert_eq!(a.mime_type, "image/png");
+                assert_eq!(b.data, "BBB=");
+                assert_eq!(b.mime_type, "image/jpeg");
+            }
+            other => panic!("expected two image blocks, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_prompt_content_image_only_keeps_empty_leading_text_block() {
+        // Image-only paste (no typed text) still ships a (empty) text block
+        // first so the agent's content array always leads with text.
+        let images = vec![crate::clipboard_image::PastedImage {
+            data_base64: "ZZZ=".to_string(),
+            mime_type: "image/png".to_string(),
+            label: "screenshot".to_string(),
+        }];
+        let content = super::build_prompt_content("", &images);
+        assert_eq!(content.len(), 2);
+        assert!(matches!(content[0], acp::ContentBlock::Text(_)));
+        assert!(matches!(content[1], acp::ContentBlock::Image(_)));
+    }
 
     #[test]
     fn truncate_for_prompt_appends_marker_only_when_over_budget() {

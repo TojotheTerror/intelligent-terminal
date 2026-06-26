@@ -35,11 +35,16 @@ auth.agent_selected_with_status: "Agent-%{name} — "
 auth.checking_authentication: "  %{spinner} Authentifizierung wird überprüft..."
 auth.waiting_for_authorization: "  %{spinner} Warten auf Autorisierung..."
 auth.code_copied_hint: "  Code in die Zwischenablage kopiert — fügen Sie ihn in Ihren Browser ein."
+auth.device_code_prompt: "Besuchen Sie %{url} und geben Sie den Code ein: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.sign_in_prompt: "Melden Sie sich an, um Ihren Agenten zu verwenden:"
 auth.card_connect: "  %{name} verbinden, um Agentfunktionen zu aktivieren"
-auth.button_sign_in_github: "[ Mit GitHub anmelden ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Mit %{name} anmelden ]"
-auth.hint_footer: "  Drücken Sie Enter zum Anmelden, Esc zum Zurückkehren"  # {Locked="Enter","Esc"}
+auth.hint_footer: "  Drücken Sie Enter, um den Anmeldebefehl zu kopieren, und fügen Sie ihn dann in ein neues Terminalfenster ein, um die Anmeldung abzuschließen"  # {Locked="Enter"}
+auth.hint_footer_back: "  Esc zum Zurückgehen"  # {Locked="Esc"}
+auth.enterprise_prompt: "  Enter zum Anmelden · E für GitHub Enterprise · Esc zum Zurückgehen"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise-Domäne: "
+auth.enterprise_hint_footer: "  Enter zum Anmelden · Esc für github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Drücken Sie Enter, um es erneut zu versuchen, oder Esc für github.com. Häufige Ursachen: eine falsch eingegebene oder nicht erreichbare Domäne, ein abgelaufener Code oder kein Copilot-Zugriff auf diesem Host."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Drücken Sie Enter, um es erneut zu versuchen, oder Esc zum Zurückgehen."  # {Locked="Enter","Esc"}
 
 # ── Chatansicht (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Denke nach…"
@@ -58,6 +63,8 @@ chat.turn_executed: "→ ausgeführt: %{title}"
 input.placeholder.connected: "Frag etwas, / für Befehle.."  # {Locked="/"}
 input.placeholder.connecting: "Verbindung wird hergestellt..."
 input.placeholder.disconnected: "Getrennt"
+# Summary of attached images; keep 📎 and %{items} verbatim.
+input.image_attachments: "📎 Bilder: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Befehlspopup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - Schrägstrich-Befehlspräfix, muss ASCII bleiben
@@ -106,8 +113,8 @@ agent.custom.auth_hint: "Stellen Sie sicher, dass %{name} installiert und im PAT
 
 # ── Agentenansicht (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Laden..."
-# {Locked="Enter","Esc","↑","↓"} - Tastenkombinationen, nicht übersetzen
-agents.footer_hint: "(↑ ↓ navigieren • Enter Sitzung starten • Esc beenden)"
+# {Locked="Enter","Esc","F5","↑","↓"} - Tastenkombinationen, nicht übersetzen
+agents.footer_hint: "(↑ ↓ navigieren • Enter Sitzung starten • Esc beenden • F5 aktualisieren)"
 agents.status.active: "Aktiv"
 agents.status.waiting_for_input: "Wartet auf Eingabe"
 agents.status.error: "Fehler"
@@ -131,6 +138,10 @@ system.stopped_max_tokens: "Die Antwort wurde abgeschnitten, nachdem das Ausgabe
 system.stopped_max_turn_requests: "Der Agent hat angehalten, nachdem sein Anfragelimit für diesen Zug erreicht wurde."
 system.stopped_refusal: "Der Agent hat es abgelehnt, mit dieser Anfrage fortzufahren."
 system.agent_busy: "Der Agent ist auf dieser Registerkarte beschäftigt — warten Sie, bis der aktuelle Prompt abgeschlossen ist."
+# Image paste messages; "agent" refers to an AI agent. Keep Enter and %{label} verbatim.
+system.image_clipboard_empty: "Kein Bild in der Zwischenablage zum Einfügen."
+system.image_not_supported: "Dieser Agent unterstützt keine Bildeingabe."
+system.image_pasted: "Bild angehängt (%{label}). Drücken Sie Enter zum Senden."  # {Locked="%{label}","Enter"}
 system.resuming_session: "Sitzung %{session_id} wird fortgesetzt..."
 system.unknown_command: "Unbekannter Befehl \"%{command}\" — als Prompt gesendet. Geben Sie /help ein, um die Liste anzuzeigen."
 system.busy_use_stop: "Warten Sie, bis der aktuelle Prompt abgeschlossen ist, oder verwenden Sie zuerst /stop."
