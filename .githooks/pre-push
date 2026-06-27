@@ -1,0 +1,42 @@
+#!/bin/sh
+
+# Conservative Intelligent Terminal fork safety hook.
+# This hook is intentionally strict: only the approved HTTPS fork URL may receive
+# pushes from this workspace.
+
+allowed_url='https://github.com/TojotheTerror/intelligent-terminal.git'
+remote_name=${1:-}
+remote_url=${2:-}
+
+remote_name_lc=$(printf '%s' "$remote_name" | tr '[:upper:]' '[:lower:]')
+remote_url_lc=$(printf '%s' "$remote_url" | tr '[:upper:]' '[:lower:]')
+
+deny_push() {
+    reason=$1
+    printf '%s\n' 'pre-push: blocked push from the Intelligent Terminal workspace.' >&2
+    printf '%s\n' "pre-push: reason: $reason" >&2
+    printf '%s\n' "pre-push: allowed push target: $allowed_url" >&2
+    printf '%s\n' 'pre-push: inspect remotes with: git remote -v' >&2
+    exit 1
+}
+
+case "$remote_name_lc" in
+    *upstream*)
+        deny_push 'remote name is an upstream remote'
+        ;;
+esac
+
+case "$remote_url_lc" in
+    *github.com/microsoft/intelligent-terminal*|*github.com:microsoft/intelligent-terminal*)
+        deny_push 'remote URL targets microsoft/intelligent-terminal, which is read-only'
+        ;;
+    *github.com/openai/symphony*|*github.com:openai/symphony*)
+        deny_push 'remote URL targets openai/symphony, which is read-only'
+        ;;
+esac
+
+if [ "$remote_url" != "$allowed_url" ]; then
+    deny_push 'remote URL is not the approved TojotheTerror/intelligent-terminal fork'
+fi
+
+exit 0
