@@ -53,8 +53,8 @@ GitHub CLI commands that can write must use an explicit repository target. For I
 
 ```bash
 gh pr create -R TojotheTerror/intelligent-terminal
-gh pr view -R TojotheTerror/intelligent-terminal
-gh issue view -R TojotheTerror/intelligent-terminal
+gh pr view 1 -R TojotheTerror/intelligent-terminal
+gh issue view 123 -R TojotheTerror/intelligent-terminal
 ```
 
 Do not rely on `gh` defaults for write actions. Do not run `gh pr create`, `gh pr edit`, `gh issue create`, `gh release create`, or similar write commands unless `-R owner/repo` points at the approved fork.

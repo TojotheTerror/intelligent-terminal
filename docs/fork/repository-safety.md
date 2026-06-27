@@ -64,10 +64,10 @@ Always pass `-R owner/repo` for GitHub CLI commands that can read or write repos
 Safe target examples:
 
 ```bash
-gh repo view -R TojotheTerror/intelligent-terminal
-gh pr view -R TojotheTerror/intelligent-terminal
+gh repo view TojotheTerror/intelligent-terminal
+gh pr view 1 -R TojotheTerror/intelligent-terminal
 gh pr create -R TojotheTerror/intelligent-terminal
-gh issue view -R TojotheTerror/intelligent-terminal CODEX-28
+gh issue view 123 -R TojotheTerror/intelligent-terminal
 ```
 
 Forbidden patterns:
