@@ -28,6 +28,7 @@
 - [FAQ](./doc/faq.md)
 - [Feedback](#feedback)
 - [Contributing](#contributing)
+  - [Fork Safety](#fork-safety)
 - [Code of Conduct](#code-of-conduct)
 - [Security](#security)
 - [Trademarks](#trademarks)
@@ -241,6 +242,10 @@ Intelligent Terminal ships as a separate app and installs next to your existing 
 We are excited to work alongside you, our amazing community, to build and enhance Intelligent Terminal!
 
 **Before you start work on a feature/fix**, please read & follow the [Windows Terminal Contributor's Guide](https://github.com/microsoft/terminal/blob/main/CONTRIBUTING.md). The contribution process is the same.
+
+### Fork Safety
+
+If you work in a forked checkout or use agentic workers, read the [repository safety guide](./docs/fork/repository-safety.md) before running write-capable Git or GitHub CLI commands.
 
 ---
 
